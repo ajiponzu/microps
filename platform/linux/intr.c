@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 #include <signal.h>
 #include <pthread.h>
@@ -7,14 +8,15 @@
 #include "util.h"
 #include "net.h"
 
+// IRQ(割り込み要求)情報のノード構造体
 struct irq_entry
 {
-  struct irq_entry *next;
-  unsigned int irq;
-  int (*handler)(unsigned int irq, void *dev);
-  int flags;
-  char name[16];
-  void *dev;
+  struct irq_entry *next;                      // 次のIRQ構造体へのポインタ
+  unsigned int irq;                            // 割り込み番号 (IRQ番号)
+  int (*handler)(unsigned int irq, void *dev); // 割り込みハンドラ
+  int flags;                                   // IRQ番号を共有可能か? SHAREDなら共有可能
+  char name[16];                               // デバッグ出力で識別するための名前
+  void *dev;                                   // 割り込みの発生元デバイス
 };
 
 static struct irq_entry *irqs;
@@ -22,7 +24,7 @@ static struct irq_entry *irqs;
 static sigset_t sigmask; // シグナルマスク用のシグナル集合
 
 static pthread_t tid;             // 割り込みスレッドのスレッドID
-static pthread_barrier_t barrier; // スレッド感の動機のためのバリア
+static pthread_barrier_t barrier; // スレッド間の同期のためのバリア
 
 int intr_request_irq(unsigned int irq, int (*handler)(unsigned int irq, void *dev), int flags, const char *name, void *dev)
 {

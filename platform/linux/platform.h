@@ -31,11 +31,19 @@ memory_free(void *ptr)
 
 #define INTR_IRQ_SHARED 0x0001
 
+// 割り込み要求
 extern int intr_request_irq(unsigned int irq, int (*handler)(unsigned int irq, void *id), int flags, const char *name, void *dev);
+
+// 割り込み起動関数
 extern int intr_raise_irq(unsigned int irq);
 
+// 割り込み実行関数
 extern int intr_run(void);
+
+// 割り込み停止関数
 extern void intr_shutdown(void);
+
+// 割り込み初期化
 extern int intr_init(void);
 
 /*
