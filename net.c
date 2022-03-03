@@ -29,7 +29,7 @@ int net_device_register(struct net_device *dev)
 
   dev->index = index++;                                        // 初期デバイス番号は0
   snprintf(dev->name, sizeof(dev->name), "net%d", dev->index); // デバイス名生成
-  /* デバイスリストの末尾に追加 */
+  /* デバイスリストの先頭に追加 */
   dev->next = devices;
   devices = dev;
   /* end */
