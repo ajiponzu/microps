@@ -182,15 +182,40 @@ int net_input_handler(uint16_t type, const uint8_t *data, size_t len, struct net
         errorf("memory_alloc() failure");
         return -1;
       }
+      entry->dev = dev;
       entry->len = len;
       memcpy(entry->data, data, len);
       queue_push(&(proto->queue), entry);
-      memory_free(entry); // queue_pushでコピー元として使用されたので解放してもよい
       /* end */
-      debugf("queue pushed (num:%u), dev=%s, type=0x%04x, len=%zu", proto->queue.num, dev->name, len);
+      debugf("queue pushed (num:%u), dev=%s, type=0x%04x, len=%zd", proto->queue.num, dev->name, len);
       debugdump(data, len);
+      intr_raise_irq(INTR_IRQ_SOFTIRQ);
 
       return 0;
+    }
+  }
+
+  return 0;
+}
+
+int net_softirq_handler(void)
+{
+  struct net_protocol *proto;
+  struct net_protocol_queue_entry *entry;
+
+  for (proto = protocols; proto; proto = proto->next)
+  {
+    while (1)
+    {
+      entry = queue_pop(&proto->queue);
+      if (!entry)
+      {
+        break;
+      }
+      debugf("queue popped (num: %u), dev=%s, type=0x%04x, len=%zd", proto->queue.num, entry->dev->name, proto->type, entry->len);
+      debugdump(entry->data, entry->len);
+      proto->handler(entry->data, entry->len, entry->dev);
+      memory_free(entry);
     }
   }
 
