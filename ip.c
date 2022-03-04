@@ -5,6 +5,7 @@
 #include "net.h"
 #include "ip.h"
 
+// ipの入力関数
 static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
 {
   debugf("dev=%s, len=%zu", dev->name, len);
@@ -13,7 +14,7 @@ static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
 
 int ip_init(void)
 {
-  if (net_protocol_register(NET_PROTOCOL_TYPE_IP, ip_input) == -1)
+  if (net_protocol_register(NET_PROTOCOL_TYPE_IP, ip_input) == -1) // プロトコルスタックにipの入力関数を登録
   {
     errorf("net_protocol_register() failure");
     return -1;

@@ -9,23 +9,25 @@
 #include "net.h"
 #include "ip.h"
 
+// プロトコル構造体
 struct net_protocol
 {
-  struct net_protocol *next;
-  uint16_t type;
-  struct queue_head queue;
-  void (*handler)(const uint8_t *data, size_t len, struct net_device *dev);
+  struct net_protocol *next;                                                // 次のプロトコルへのポインタ, なお他もそうだが, 新しい要素が先頭に来るタイプの連結リスト
+  uint16_t type;                                                            // プロトコルの種類(TCPとかARPとか). NET_PROTOCOL_TYPE_XXX
+  struct queue_head queue;                                                  // 受信キュー
+  void (*handler)(const uint8_t *data, size_t len, struct net_device *dev); // プロトコルの入力関数ポインタ
 };
 
+// 受信キューのエントリ構造体
 struct net_protocol_queue_entry
 {
-  struct net_device *dev;
-  size_t len;
-  uint8_t data[];
+  struct net_device *dev; // 要求してきたデバイス
+  size_t len;             // 下記データサイズ
+  uint8_t data[];         // フレキシブル配列
 };
 
-static struct net_device *devices; // デバイスリスト(のヘッダポインタ)
-static struct net_protocol *protocols;
+static struct net_device *devices;     // デバイスリスト(のヘッダポインタ)
+static struct net_protocol *protocols; // 登録済みのプロトコルリスト(のヘッダポインタ)
 
 struct net_device *net_device_alloc(void)
 {
@@ -143,6 +145,7 @@ int net_protocol_register(uint16_t type, void (*handler)(const uint8_t *data, si
 {
   struct net_protocol *proto;
 
+  /* 重複登録の確認 */
   for (proto = protocols; proto; proto = proto->next)
   {
     if (type == proto->type)
@@ -151,15 +154,20 @@ int net_protocol_register(uint16_t type, void (*handler)(const uint8_t *data, si
       return -1;
     }
   }
+  /* end */
+  /* プロトコル構造体のメモリ確保 */
   proto = memory_alloc(sizeof(*proto));
   if (!proto)
   {
     errorf("memory_alloc() failure");
     return -1;
   }
+  /* end */
+  /* データ設定 */
   proto->type = type;
   proto->handler = handler;
-  proto->next = protocols;
+  /* end */
+  proto->next = protocols; // プロトコルリストの先頭に追加
   protocols = proto;
   infof("registered, type=0x%04x", type);
 
@@ -176,21 +184,31 @@ int net_input_handler(uint16_t type, const uint8_t *data, size_t len, struct net
     if (proto->type == type)
     {
       /* プロトコルの受信キューにエントリを挿入 */
-      entry = memory_alloc(sizeof(*entry) + len);
+      /* エントリのメモリ確保 */
+      entry = memory_alloc(sizeof(*entry) + len); // 必ずデータサイズ分だけ余分に確保
       if (!entry)
       {
         errorf("memory_alloc() failure");
         return -1;
       }
+      /* end */
+      /* データ・メタデータのコピー */
       entry->dev = dev;
       entry->len = len;
       memcpy(entry->data, data, len);
-      queue_push(&(proto->queue), entry);
+      /* end */
+      void *ret = queue_push(&(proto->queue), entry); // 受信キューにプッシュ
+      if (!ret)
+      {
+        errorf("queue_push() failure");
+        return -1;
+      }
       /* end */
       debugf("queue pushed (num:%u), dev=%s, type=0x%04x, len=%zd", proto->queue.num, dev->name, len);
       debugdump(data, len);
       intr_raise_irq(INTR_IRQ_SOFTIRQ);
 
+      /* プロトコルが見つからなかったら捨てる */
       return 0;
     }
   }
@@ -269,11 +287,13 @@ int net_init(void)
     return -1;
   }
   /* end */
+  /* ipの初期化 */
   if (ip_init() == -1)
   {
     errorf("ip_init() failure");
     return -1;
   }
+  /* end */
   infof("initialized");
 
   return 0;
