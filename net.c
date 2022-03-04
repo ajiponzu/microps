@@ -244,9 +244,8 @@ int net_input_handler(uint16_t type, const uint8_t *data, size_t len, struct net
         return -1;
       }
       /* end */
-      printf("len=%lu", len);
-      debugf("queue pushed (num:%u), dev=%s, type=0x%04x, len=%lu", proto->queue.num, dev->name, entry->len);
-      debugdump(data, entry->len);
+      debugf("queue pushed (num:%u), dev=%s, type=0x%04x, len=%lu", proto->queue.num, dev->name, type, entry->len);
+      debugdump(data, len);
       intr_raise_irq(INTR_IRQ_SOFTIRQ); // プロトコルの受信キューへエントリを追加した後, ソフトウェア割り込みを発生させる
 
       /* プロトコルが見つからなかったら捨てる */

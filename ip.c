@@ -190,7 +190,6 @@ static void ip_dump(const uint8_t *data, size_t len)
 // ipの入力関数
 static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
 {
-  printf("bbbbbbbbbbbbbbbbbbbbbbbb\n");
   struct ip_hdr *hdr;
   uint8_t v;
   uint16_t hlen, total, offset;
@@ -258,9 +257,8 @@ static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
   }
   /* end */
   /* 宛先IPアドレスの検証 */
-  if (iface->unicast != hdr->dst || iface->netmask != hdr->dst || iface->broadcast != hdr->dst)
+  if (iface->unicast != hdr->dst && iface->netmask != hdr->dst && iface->broadcast != hdr->dst)
   {
-    printf("aaaaaaaaaaaaa\n");
     return;
   }
   /* end */
