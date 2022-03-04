@@ -206,7 +206,7 @@ int net_input_handler(uint16_t type, const uint8_t *data, size_t len, struct net
       /* end */
       debugf("queue pushed (num:%u), dev=%s, type=0x%04x, len=%zd", proto->queue.num, dev->name, len);
       debugdump(data, len);
-      intr_raise_irq(INTR_IRQ_SOFTIRQ);
+      intr_raise_irq(INTR_IRQ_SOFTIRQ); // プロトコルの受信キューへエントリを追加した後, ソフトウェア割り込みを発生させる
 
       /* プロトコルが見つからなかったら捨てる */
       return 0;
@@ -221,19 +221,20 @@ int net_softirq_handler(void)
   struct net_protocol *proto;
   struct net_protocol_queue_entry *entry;
 
-  for (proto = protocols; proto; proto = proto->next)
+  for (proto = protocols; proto; proto = proto->next) // プロトコルリストを巡回
   {
     while (1)
     {
+      /* 受信キューからエントリを取り出す */
       entry = queue_pop(&proto->queue);
       if (!entry)
       {
-        break;
+        break; // emptyならループを終了
       }
       debugf("queue popped (num: %u), dev=%s, type=0x%04x, len=%zd", proto->queue.num, entry->dev->name, proto->type, entry->len);
       debugdump(entry->data, entry->len);
-      proto->handler(entry->data, entry->len, entry->dev);
-      memory_free(entry);
+      proto->handler(entry->data, entry->len, entry->dev); // プロトコルの入力関数を呼び出す
+      memory_free(entry);                                  // 使い終わったエントリのメモリを開放
     }
   }
 

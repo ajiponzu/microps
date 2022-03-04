@@ -100,9 +100,11 @@ static void *intr_thread(void *arg)
       terminate = 1;
       break;
     /* end */
+    /* ソフトウェア割り込み用のシグナルを補足した際の処理 */
     case SIGUSR1:
       net_softirq_handler();
       break;
+    /* end */
     /* デバイス割り込み用のシグナル */
     default:
       for (entry = irqs; entry; entry = entry->next) // IRQリストを巡回
@@ -166,7 +168,7 @@ int intr_init(void)
   pthread_barrier_init(&barrier, NULL, 2); // pthread_barrierの初期化(カウントが2になるまで待つバリア)
   sigemptyset(&sigmask);                   // シグナル集合を初期化(空)
   sigaddset(&sigmask, SIGHUP);             // シグナル集合にSIGHUPを追加 (割り込みスレッド終了通知用)
-  sigaddset(&sigmask, SIGUSR1);
+  sigaddset(&sigmask, SIGUSR1);            // ソフトウェア割り込みとして使用するSIGUSR1をシグナル集合に追加
 
   return 0;
 }

@@ -71,9 +71,10 @@ extern int net_device_register(struct net_device *dev);
 // デバイスへの出力
 extern int net_device_output(struct net_device *dev, uint16_t type, const uint8_t *data, size_t len, const void *dst);
 
+// プロトコル登録
 extern int net_protocol_register(uint16_t type, void (*handler)(const uint8_t *data, size_t len, struct net_device *dev));
 
-// デバイスからの入力
+// デバイスからの入力ハンドラ
 extern int net_input_handler(uint16_t type, const uint8_t *data, size_t len, struct net_device *dev);
 
 // ソフトウェア割り込みハンドラ
