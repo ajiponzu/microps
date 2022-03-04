@@ -112,6 +112,46 @@ static int net_device_close(struct net_device *dev)
   return 0;
 }
 
+int net_device_add_iface(struct net_device *dev, struct net_iface *iface)
+{
+  struct net_iface *entry;
+
+  /* インタフェースの重複登録のチェック */
+  for (entry = dev->ifaces; entry; entry = entry->next)
+  {
+    if (entry->family == iface->family)
+    {
+      errorf("already exists, dev=%s, family=%d", dev->name, entry->family);
+      return -1;
+    }
+  }
+  /* end */
+  iface->dev = dev;
+  /* デバイスのインターフェースリストにifaceを追加 */
+  iface->next = dev->ifaces; // インターフェースリストの先頭と連結
+  dev->ifaces = iface;       // その後, インターフェースリストの先頭アドレスを更新
+  /* end */
+
+  return 0;
+}
+
+struct net_iface *net_device_get_iface(struct net_device *dev, int family)
+{
+  struct net_iface *entry;
+
+  /* デバイスのインターフェースリストを巡回 */
+  for (entry = dev->ifaces; entry; entry = entry->next)
+  {
+    if (entry->family == family) // ファミリが一致したら
+    {
+      return entry; // そのインタフェースを返す
+    }
+  }
+  /* end */
+
+  return NULL; // どのインタフェースもファミリが一致しない場合はNULLを返す
+}
+
 int net_device_output(struct net_device *dev, uint16_t type, const uint8_t *data, size_t len, const void *dst)
 {
   /* デバイスの状態を確認 */
@@ -204,8 +244,9 @@ int net_input_handler(uint16_t type, const uint8_t *data, size_t len, struct net
         return -1;
       }
       /* end */
-      debugf("queue pushed (num:%u), dev=%s, type=0x%04x, len=%zd", proto->queue.num, dev->name, len);
-      debugdump(data, len);
+      printf("len=%lu", len);
+      debugf("queue pushed (num:%u), dev=%s, type=0x%04x, len=%lu", proto->queue.num, dev->name, entry->len);
+      debugdump(data, entry->len);
       intr_raise_irq(INTR_IRQ_SOFTIRQ); // プロトコルの受信キューへエントリを追加した後, ソフトウェア割り込みを発生させる
 
       /* プロトコルが見つからなかったら捨てる */
