@@ -29,17 +29,18 @@
 #define NET_PROTOCOL_TYPE_ARP 0x0806
 #define NET_PROTOCOL_TYPE_IPV6 0x086dd
 
-/* インターフェースのファミリ(種別) */
+/* インタフェースのファミリ(種別) */
 #define NET_IFACE_FAMILY_IP 1
 #define NET_IFACE_FAMILY_IPV6 2
 /* end */
 
 #define NET_IFACE(x) ((struct net_iface *)(x))
 
+// デバイス構造体
 struct net_device
 {
   struct net_device *next;  // 次のデバイスへのポインタ
-  struct net_iface *ifaces; // インターフェースリスト
+  struct net_iface *ifaces; // デバイスに実装されているインタフェースリスト
   unsigned int index;
   char name[IFNASMSIZ];
   uint16_t type; // NET_DEVICE_TYPE_XXX
@@ -61,12 +62,12 @@ struct net_device
   void *priv;                 // デバイスドライバが使うプライベートデータへのポインタ
 };
 
-// インターフェース構造体. デバイスに紐づけるだけなので, どのファミリにも共通のデータを取り扱うときに使用.
+// インタフェース構造体. デバイスに紐づけるだけなので, どのファミリにも共通のデータを取り扱うときに使用.
 struct net_iface
 {
-  struct net_iface *next; // 次のインターフェースへのポインタ
-  struct net_device *dev; // インターフェースが紐づけられているデバイスへのポインタ
-  int family;             // インターフェースファミリ
+  struct net_iface *next; // 次のインタフェースへのポインタ
+  struct net_device *dev; // インタフェースが紐づけられているデバイスへのポインタ
+  int family;             // インタフェースファミリ
 };
 
 /* デバイスドライバ関数のポインタ群 */
@@ -84,8 +85,10 @@ extern struct net_device *net_device_alloc(void);
 // デバイスをリストに登録
 extern int net_device_register(struct net_device *dev);
 
+// デバイスにインタフェースを紐づける
 extern int net_device_add_iface(struct net_device *dev, struct net_iface *iface);
 
+// デバイスに紐づいたインタフェースを取得する
 extern struct net_iface *net_device_get_iface(struct net_device *dev, int family);
 
 extern int net_device_output(struct net_device *dev, uint16_t type, const uint8_t *data, size_t len, const void *dst);

@@ -126,10 +126,10 @@ int net_device_add_iface(struct net_device *dev, struct net_iface *iface)
     }
   }
   /* end */
-  iface->dev = dev;
-  /* デバイスのインターフェースリストにifaceを追加 */
-  iface->next = dev->ifaces; // インターフェースリストの先頭と連結
-  dev->ifaces = iface;       // その後, インターフェースリストの先頭アドレスを更新
+  iface->dev = dev; // インタフェース
+  /* デバイスのインタフェースリストにifaceを追加 */
+  iface->next = dev->ifaces; // インタフェースリストの先頭と連結
+  dev->ifaces = iface;       // その後, インタフェースリストの先頭アドレスを更新
   /* end */
 
   return 0;

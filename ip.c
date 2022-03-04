@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <sys/types.h>
+#include <string.h>
 
 #include "util.h"
 #include "net.h"
@@ -9,18 +11,19 @@
 
 #include "platform.h"
 
+// IPヘッダを表現するための構造体. uint8_t[]バイト列をこの構造体にキャストするとIPヘッダとみなすことができる.
 struct ip_hdr
 {
-  uint8_t vhl;
-  uint8_t tos;
-  uint16_t total;
+  uint8_t vhl;    // xxxxyyyy: 上位ビットx->バージョン, 下位ビットy->IPヘッダ長(4bitで一つの塊が何個あるか)
+  uint8_t tos;    // type of service-> precedence:3bit, delay:1bit, throughput:1bit, relibility:1bit, reserved:2bit
+  uint16_t total; // total length: IPヘッダサイズ(=iph*4bit)+データサイズ
   uint16_t id;
-  uint16_t offset;
-  uint8_t ttl;
-  uint8_t protocol;
-  uint16_t sum;
-  ip_addr_t src;
-  ip_addr_t dst;
+  uint16_t offset;  // Flags(3bit)とFragmentOffset(13bit)を一まとまりで扱う
+  uint8_t ttl;      // time to live
+  uint8_t protocol; // Ethernetフレームヘッダのプロトコルタイプと混同しないように注意
+  uint16_t sum;     // チェックサム
+  ip_addr_t src;    // 送信元アドレス (ネットワークバイトオーダーのバイナリ値)
+  ip_addr_t dst;    // 宛先アドレス (ネットワークバイトオーダーのバイナリ値)
   uint8_t options[];
 };
 
@@ -63,13 +66,16 @@ struct ip_iface *ip_iface_alloc(const char *unicast, const char *netmask)
   struct ip_iface *iface;
   int failed = 0;
 
+  /* IPインタフェース構造体のメモリを確保 */
   iface = memory_alloc(sizeof(*iface));
   if (!iface)
   {
     errorf("memory_alloc() failure");
     return NULL;
   }
-  NET_IFACE(iface)->family = NET_IFACE_FAMILY_IP;
+  /* end */
+  NET_IFACE(iface)->family = NET_IFACE_FAMILY_IP; // インタフェース構造体にファミリを設定
+
   /* IPインタフェースにアドレス情報を設定 */
   /* ユニキャストアドレスを文字列から取得 */
   if (ip_addr_pton(unicast, &(iface->unicast)) < 0)
@@ -137,9 +143,9 @@ struct ip_iface *ip_iface_select(ip_addr_t addr)
   /* IPインタフェースの検索 */
   for (entry = ifaces; entry; entry = entry->next)
   {
-    if (entry->broadcast == addr)
+    if (entry->unicast == addr) // 一致したら
     {
-      return entry;
+      return entry; // 値を返す
     }
   }
   /* end */
@@ -166,16 +172,16 @@ static void ip_dump(const uint8_t *data, size_t len)
 
   flockfile(stderr);
   hdr = (struct ip_hdr *)data;
-  v = (hdr->vhl & 0xf0) >> 4;
-  hl = hdr->vhl & 0x0f;
-  hlen = hl << 2;
+  v = (hdr->vhl & 0xf0) >> 4; // 下位ビットを0にしてから右に4シフトすることで上位ビットを得る
+  hl = hdr->vhl & 0x0f;       // 上位ビットを0にすることで下位ビットを得る
+  hlen = hl << 2;             // 実際のIPヘッダサイズはhl一つにつき4bitとして4*hl. 左2シフトは*4と同じ
   fprintf(stderr, "       vhl: 0x%02x [v: %u, hl: %u (%u)]\n", hdr->vhl, v, hl, hlen);
   fprintf(stderr, "       tos: 0x%02x\n", hdr->tos);
-  total = ntoh16(hdr->total);
-  fprintf(stderr, "     total: %u (payload: %u)\n", total, total - hlen);
+  total = ntoh16(hdr->total);                                             // 多バイト長のデータはバイトオーダーの変換が必須
+  fprintf(stderr, "     total: %u (payload: %u)\n", total, total - hlen); // 運搬データ(ペイロード)のサイズは, トータルサイズからヘッダサイズを引いた値
   fprintf(stderr, "        id: %u\n", ntoh16(hdr->id));
   offset = ntoh16(hdr->offset);
-  fprintf(stderr, "    offset: 0x%04x [flags=%x, offset=%u]\n", offset, (offset & 0xe000) >> 13, offset & 0x1fff);
+  fprintf(stderr, "    offset: 0x%04x [flags=%x, offset=%u]\n", offset, (offset & 0xe000) >> 13, offset & 0x1fff); // 上位ビットだけ, 下位ビットだけを取り出すテクニック
   fprintf(stderr, "       ttl: %u\n", hdr->ttl);
   fprintf(stderr, "  protocol: %u\n", hdr->protocol);
   fprintf(stderr, "       sum: 0x%04x\n", ntoh16(hdr->sum));
@@ -196,12 +202,14 @@ static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
   struct ip_iface *iface;
   char addr[IP_ADDR_STR_LEN];
 
+  /* 入力データサイズがIPヘッダの最小サイズより小さい場合はエラー */
   if (len < IP_HDR_SIZE_MIN)
   {
     errorf("too short");
     return;
   }
-  hdr = (struct ip_hdr *)data;
+  /* end */
+  hdr = (struct ip_hdr *)data; // バイナリデータをIPヘッダとして扱うためのキャスト. hdrに実体は持たせない
   /* IPデータグラムの検証 */
   /* バージョン検証 */
   v = (hdr->vhl & 0xf0) >> 4; // バージョン導出
@@ -228,7 +236,7 @@ static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
   }
   /* end */
   /* チェックサム */
-  if (cksum16((uint16_t *)data, len, 0) != 0)
+  if (cksum16((uint16_t *)data, hlen, 0) != 0)
   {
     errorf("this checksum is incorrect");
     return;
@@ -243,13 +251,14 @@ static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
   }
   /* IPデータグラムのフィルタリング */
   /* デバイスに紐づくIPインタフェースを取得 */
-  for (iface = ifaces; iface; iface = iface->next)
-  {
-    if (NET_IFACE(iface)->dev == dev)
-    {
-      break;
-    }
-  }
+  iface = (struct ip_iface *)net_device_get_iface(dev, NET_IFACE_FAMILY_IP);
+  /* ip_ifaceからdeviceは辿れても, 逆は無理のように思える.
+  c++のようにnet_ifaceがip_ifaceを継承しているわけでもない.
+  しかし, 構造体のメモリ配置の法則から, ip_iface構造体のポインタと, その最初のメンバであるnet_ifaceのポインタは同じである.
+  このことから, ip_ifaceのメンバであるnet_ifaceをdeviceに登録することで紐づけていたため,
+  そのnet_ifaceのポインタをip_ifaceポインタにキャストすると, すでに代入済みのユニキャスト等も把握できるようになる.
+  つまり, ip_ifaceの最初のメンバであるnet_ifaceに限っては, net_iface*とip_iface*の違いはどこまでを確保された領域とみるかだけ,ということになる.
+  */
   if (!iface)
   {
     errorf("failed to get ip_iface");
@@ -257,7 +266,7 @@ static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
   }
   /* end */
   /* 宛先IPアドレスの検証 */
-  if (iface->unicast != hdr->dst && iface->netmask != hdr->dst && iface->broadcast != hdr->dst)
+  if (hdr->dst != iface->unicast && hdr->dst != iface->broadcast && hdr->dst != IP_ADDR_BROADCAST)
   {
     return;
   }
@@ -267,6 +276,30 @@ static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
   debugf("dev=%s, iface=%s, protocol=%u, total=%u", dev->name,
          ip_addr_ntop(iface->unicast, addr, sizeof(addr)), hdr->protocol, total);
   ip_dump(data, total);
+}
+
+static int ip_output_device(struct ip_iface *iface, const uint8_t *data, size_t len, ip_addr_t dst)
+{
+}
+
+static ssize_t ip_output_core(struct ip_iface *iface, uint8_t protocol, const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst, uint16_t id, uint16_t offset)
+{
+}
+
+static uint16_t ip_generate_id(void)
+{
+  static mutex_t mutex = MUTEX_INITIALIZER;
+  static uint16_t id = 128;
+  uint16_t ret;
+
+  mutex_lock(&mutex);
+  ret = id++;
+  mutex_unlock(&mutex);
+  return ret;
+}
+
+ssize_t ip_output(uint8_t protocol, const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst)
+{
 }
 
 int ip_init(void)
