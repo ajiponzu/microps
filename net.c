@@ -8,6 +8,7 @@
 #include "util.h"
 #include "net.h"
 #include "ip.h"
+#include "icmp.h"
 
 // プロトコル構造体
 struct net_protocol
@@ -332,6 +333,13 @@ int net_init(void)
   if (ip_init() == -1)
   {
     errorf("ip_init() failure");
+    return -1;
+  }
+  /* end */
+  /* icmpの初期化 */
+  if (icmp_init() == -1)
+  {
+    errorf("icmp_init() failure");
     return -1;
   }
   /* end */
