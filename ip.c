@@ -378,7 +378,7 @@ static ssize_t ip_output_core(struct ip_iface *iface, uint8_t protocol, const ui
   hdr->src = src; // ネットワークバイトオーダーのバイナリ値を渡されているので, 送信時は変換不要
   hdr->dst = dst;
   hdr->sum = cksum16((uint16_t *)hdr, hlen, 0); // チェックサムはヘッダ値が出そろってから計算しないと意味がない
-  memcpy((buf + hlen), data, len);              // srcポインタはbuf基準で渡すことに注意. hdrにオフセットを足すと, hdrサイズ*オフセット足してしまう
+  memcpy(hdr + 1, data, len);                   // srcポインタはbuf基準で渡すことに注意. hdrにオフセットを足すと, hdrサイズ*オフセット足してしまう
   /* end */
 
   debugf("dev=%s, dst=%s, protocol=%u, len=%u",

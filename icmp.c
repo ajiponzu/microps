@@ -1,9 +1,12 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "util.h"
 #include "ip.h"
 #include "icmp.h"
+
+#define ICMP_BUFSIZ IP_PAYLOAD_SIZE_MAX
 
 // ICMPヘッダ構造体（メッセージ固有のフィールドは単なる32bitの値として扱う）
 struct icmp_hdr
@@ -14,7 +17,7 @@ struct icmp_hdr
   uint32_t values;
 };
 
-// Echo / EchoReply メッセージ構造体（メッセージ種別が判別した段階でこちらにキャストする）
+// Echo / EchoReply メッセージ構造体（メッセージ種別が判別した段階でicmpヘッダ構造体をこちらにキャストする）
 struct icmp_echo
 {
   uint8_t type;
@@ -110,6 +113,55 @@ void icmp_input(const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst, s
          ip_addr_ntop(dst, addr2, sizeof(addr2)), len);
   debugdump(data, len);
   icmp_dump(data, len);
+
+  /* EchoRepplyメッセージの送信 */
+  switch (hdr->type)
+  {
+  case ICMP_TYPE_ECHO: // メッセージタイプがEchoの場合
+    /* ICMPの出力関数を呼び出す */
+    icmp_output(ICMP_TYPE_ECHOREPLY, hdr->code, hdr->values, (uint8_t *)(hdr + 1), len - sizeof(hdr), iface->unicast, src); // 送るデータはhdrの末尾の次の番地から存在
+    // typeは返信になるので設定. 他はhdrのまま. ipアドレスの送信元は, 受け取ったifaceのユニキャスト. 返信なのでsrcを宛先に指定する
+    // 送るデータ長だが, icmp_outputではペイロードのみが送られることを想定しているため, 受信データサイズからヘッダサイズを引く必要がある.
+    // 受信時にはそのプロトコルのヘッダがくっついてくる
+    /* end */
+    break;
+  default:
+    /* ignore */
+    break;
+  }
+  /* end */
+}
+
+int icmp_output(uint8_t type, uint8_t code, uint32_t values, const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst)
+{
+  uint8_t buf[ICMP_BUFSIZ];
+  struct icmp_hdr *hdr;
+  size_t msg_len; // ICMPメッセージの長さ（ヘッダ＋データ）
+  char addr1[IP_ADDR_STR_LEN];
+  char addr2[IP_ADDR_STR_LEN];
+
+  hdr = (struct icmp_hdr *)buf;
+
+  /* ICMPメッセージの生成 */
+  /* 必要な値は引数として受け取っている
+    ・values はネットワークバイトオーダーで渡される
+    ・lenはペイロードのサイズ
+  */
+  msg_len = sizeof(*hdr) + len; // データサイズ計算
+  hdr->sum = 0;                 // 送信用のチェックサムは初期値を必ず0に設定
+  hdr->type = type;
+  hdr->code = code;
+  hdr->values = values;
+  memcpy(hdr + 1, data, len);                      // icmpヘッダサイズは固定. この行でペイロードをコピー. hdr+1はpHdr=>&hdr[0]からpHdr=>&hdr[1]と同義
+  hdr->sum = cksum16((uint16_t *)hdr, msg_len, 0); // icmpチェックサムの範囲はデータ全て
+  /* end */
+
+  debugf("%s => %s, len=%zu", ip_addr_ntop(src, addr1, sizeof(addr1)), ip_addr_ntop(dst, addr2, sizeof(addr2)), msg_len);
+  icmp_dump((uint8_t *)hdr, msg_len);
+
+  /* IPの出力関数を呼び出してメッセージを送信 */
+  return ip_output(IP_PROTOCOL_ICMP, buf, msg_len, src, dst); // icmpヘッダ含むメッセージを送信
+  /* end */
 }
 
 int icmp_init(void)
