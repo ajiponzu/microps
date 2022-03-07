@@ -10,8 +10,8 @@
 #define ARP_RESOLVE_INCOMPLETE 0
 #define ARP_RESOLVE_FOUND 1
 
-extern int
-arp_resolve(struct net_iface *iface, ip_addr_t pa, uint8_t *ha);
+// arp要求の解決
+extern int arp_resolve(struct net_iface *iface, ip_addr_t pa, uint8_t *ha);
 
 // arpの初期化
 extern int arp_init(void);

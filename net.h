@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/time.h>
 
 #ifndef IFNASMSIZ
 #define IFNASMSIZ 16
@@ -98,6 +99,12 @@ extern int net_device_output(struct net_device *dev, uint16_t type, const uint8_
 
 // プロトコル登録
 extern int net_protocol_register(uint16_t type, void (*handler)(const uint8_t *data, size_t len, struct net_device *dev));
+
+// タイマーの登録
+extern int net_timer_register(struct timeval interval, void (*handler)(void));
+
+// タイマーのコールバック関数呼び出し
+extern int net_timer_handler(void);
 
 // デバイスからの入力ハンドラ
 extern int net_input_handler(uint16_t type, const uint8_t *data, size_t len, struct net_device *dev);

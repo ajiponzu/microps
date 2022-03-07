@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "platform.h"
 
@@ -28,8 +29,18 @@ struct net_protocol_queue_entry
   uint8_t data[];         // フレキシブル配列
 };
 
-static struct net_device *devices;     // デバイスリスト(のヘッダポインタ)
-static struct net_protocol *protocols; // 登録済みのプロトコルリスト(のヘッダポインタ)
+// タイマーの構造体
+struct net_timer
+{
+  struct net_timer *next;  // 次のタイマーへのポインタ
+  struct timeval interval; // 発火のインターバル
+  struct timeval last;     // 最後の発火時間
+  void (*handler)(void);   // 発火時に呼び出す関数へのポインタ
+};
+
+static struct net_device *devices;     // デバイスリスト(のヘッドポインタ)
+static struct net_protocol *protocols; // 登録済みのプロトコルリスト(のヘッドポインタ)
+static struct net_timer *timers;       // タイマーリスト(のヘッドポインタ)
 
 struct net_device *net_device_alloc(void)
 {
@@ -213,6 +224,55 @@ int net_protocol_register(uint16_t type, void (*handler)(const uint8_t *data, si
   protocols = proto;
   infof("registered, type=0x%04x", type);
 
+  return 0;
+}
+
+int net_timer_register(struct timeval interval, void (*handler)(void))
+{
+  struct net_timer *timer;
+
+  /* タイマー構造体のメモリを確保 */
+  timer = memory_alloc(sizeof(*timer));
+  if (!timer)
+  {
+    errorf("memory_alloc() failure");
+    return -1;
+  }
+  /* end */
+  /* タイマーに値を設定 */
+  gettimeofday(&timer->last, NULL);
+  timer->handler = handler;
+  timer->interval = interval;
+  /* end */
+  /* タイマーリストの先頭に追加 */
+  timer->next = timers;
+  timers = timer;
+  /* end */
+
+  infof("registered: interval={%d, %d}", interval.tv_sec, interval.tv_usec);
+  return 0;
+}
+
+int net_timer_handler(void)
+{
+  struct net_timer *timer;
+  struct timeval now, diff;
+
+  for (timer = timers; timer; timer = timer->next) // タイマーリストを巡回
+  {
+    /* 最後の発火からの経過時間を求める */
+    gettimeofday(&now, NULL);
+    timersub(&now, &timer->last, &diff);
+    /* end */
+    if (timercmp(&timer->interval, &diff, <) != 0) // 発火時刻を迎えているかどうかの確認
+    /* true (!0) or false (0) */
+    {
+      /* タイマーの発火 */
+      timer->handler();
+      gettimeofday(&timer->last, NULL);
+      /* end */
+    }
+  }
   return 0;
 }
 
