@@ -119,7 +119,7 @@ void icmp_input(const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst, s
   {
   case ICMP_TYPE_ECHO: // メッセージタイプがEchoの場合
     /* ICMPの出力関数を呼び出す */
-    icmp_output(ICMP_TYPE_ECHOREPLY, hdr->code, hdr->values, (uint8_t *)(hdr + 1), len - sizeof(hdr), iface->unicast, src); // 送るデータはhdrの末尾の次の番地から存在
+    icmp_output(ICMP_TYPE_ECHOREPLY, hdr->code, hdr->values, (uint8_t *)(hdr + 1), len - sizeof(*hdr), iface->unicast, src); // 送るデータはhdrの末尾の次の番地から存在
     // typeは返信になるので設定. 他はhdrのまま. ipアドレスの送信元は, 受け取ったifaceのユニキャスト. 返信なのでsrcを宛先に指定する
     // 送るデータ長だが, icmp_outputではペイロードのみが送られることを想定しているため, 受信データサイズからヘッダサイズを引く必要がある.
     // 受信時にはそのプロトコルのヘッダがくっついてくる
