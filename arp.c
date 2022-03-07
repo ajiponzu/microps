@@ -207,6 +207,31 @@ static struct arp_cache *arp_cache_insert(ip_addr_t pa, const uint8_t *ha)
   return cache;
 }
 
+// arp要求
+static int arp_request(struct net_iface *iface, ip_addr_t tpa)
+{
+  struct arp_ether_ip request;
+
+  /* arp要求のメッセージを生成する */
+  request.hdr.hrd = hton16(ARP_HRD_ETHER);
+  request.hdr.pro = hton16(ARP_PRO_IP);
+  request.hdr.hln = ETHER_ADDR_LEN;
+  request.hdr.pln = IP_ADDR_LEN;
+  request.hdr.op = hton16(ARP_OP_REQUEST);
+  memcpy(request.sha, iface->dev->addr, ETHER_ADDR_LEN);
+  memcpy(request.spa, &((struct ip_iface *)iface)->unicast, IP_ADDR_LEN);
+  memset(request.tha, 0, ETHER_ADDR_LEN);
+  memcpy(request.tpa, &tpa, IP_ADDR_LEN);
+  /* end */
+
+  debugf("dev=%s, len=%zu", iface->dev->name, sizeof(request));
+  arp_dump((uint8_t *)&request, sizeof(request));
+
+  /* デバイスの送信関数を呼び出してarp要求のメッセージを送信する */
+  return net_device_output(iface->dev, ETHER_TYPE_ARP, (uint8_t *)(&request), sizeof(request), iface->dev->broadcast);
+  /* end */
+}
+
 // arp応答
 static int arp_reply(struct net_iface *iface, const uint8_t *tha, ip_addr_t tpa, const uint8_t *dst)
 {
@@ -320,10 +345,34 @@ int arp_resolve(struct net_iface *iface, ip_addr_t pa, uint8_t *ha)
   cache = arp_cache_select(pa); // プロトコルアドレスをキーとしてarpキャッシュを検索
   if (!cache)                   // 見つからないならエラー
   {
-    debugf("cache not found, pa=%s", ip_addr_ntop(pa, addr1, sizeof(addr1)));
+    char addr[IP_ADDR_STR_LEN];
+    errorf("cache not found, pa=%s", ip_addr_ntop(pa, addr, IP_ADDR_STR_LEN));
+    /* arpキャッシュに問い合わせ中のエントリを作成 */
+    cache = arp_cache_alloc();
+    if (!cache)
+    {
+      return ARP_RESOLVE_ERROR; // 確保失敗
+    }
+    cache->state = ARP_RESOLVE_INCOMPLETE;
+    memcpy(cache->ha, ha, ETHER_ADDR_LEN);
+    cache->pa = pa;
+    gettimeofday(&(cache->timestamp), NULL);
+    /* end */
     mutex_unlock(&mutex);
-    return ARP_RESOLVE_ERROR; // 見つからない場合は未解決
+    arp_request(iface, pa);        // arp要求送信
+    return ARP_RESOLVE_INCOMPLETE; // 問い合わせ中
   }
+  /* 見つかったエントリが INCOMPLETE のままだったらパケロスしているかもしれないので念のため再送する. arp_request実行後なのにincompleteな場合
+    ・タイムスタンプは更新しない
+  */
+  if (cache->state == ARP_CACHE_STATE_INCOMPLETE)
+  {
+    pthread_mutex_unlock(&mutex);
+    arp_request(iface, pa); /* just in case packet loss */
+    return ARP_RESOLVE_INCOMPLETE;
+  }
+  /* end */
+
   memcpy(ha, cache->ha, ETHER_ADDR_LEN); // 見つかったハードウェアアドレスをコピー
   mutex_unlock(&mutex);
   debugf("resolved, pa=%s, ha=%s",
