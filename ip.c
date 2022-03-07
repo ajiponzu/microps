@@ -8,6 +8,7 @@
 #include "util.h"
 #include "net.h"
 #include "ip.h"
+#include "arp.h"
 
 #include "platform.h"
 
@@ -334,6 +335,7 @@ static void ip_input(const uint8_t *data, size_t len, struct net_device *dev)
 static int ip_output_device(struct ip_iface *iface, const uint8_t *data, size_t len, ip_addr_t dst)
 {
   uint8_t hwaddr[NET_DEVICE_ADDR_LEN] = {};
+  int ret;
 
   if (NET_IFACE(iface)->dev->flags & NET_DEVICE_FLAG_NEED_ARP) // ARP によるアドレス解決が必要なデバイスのための処理
   {
@@ -346,8 +348,13 @@ static int ip_output_device(struct ip_iface *iface, const uint8_t *data, size_t 
     /* end */
     else
     {
-      errorf("arp does not implement");
-      return -1;
+      /* arp_resolve()を呼び出してアドレスを解決する */
+      ret = arp_resolve((struct net_iface *)iface, dst, hwaddr);
+      if (ret != ARP_RESOLVE_FOUND)
+      {
+        return ret;
+      }
+      /* end */
     }
   }
 
