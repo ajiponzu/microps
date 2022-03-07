@@ -50,3 +50,7 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+tap
+pf_packet
+pf_packet.c
+tap.c
