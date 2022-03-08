@@ -16,13 +16,21 @@
 #define IP_PAYLOAD_SIZE_MAX (IP_TOTAL_SIZE_MAX - IP_HDR_SIZE_MIN)
 
 #define IP_ADDR_LEN 4
-#define IP_ADDR_STR_LEN 16 // "ddd.ddd.ddd.ddd\0"
+#define IP_ADDR_STR_LEN 16                                                      // "ddd.ddd.ddd.ddd\0"
+#define IP_ENDPOINT_STR_LEN (IP_ADDR_STR_LEN + 6) /* xxx.xxx.xxx.xxx:yyyyy\n */ // IPエンドポイントを文字列に必要なバッファのサイズ（終端文字を含む)
 
 #define IP_PROTOCOL_ICMP 1
 #define IP_PROTOCOL_TCP 6
 #define IP_PROTOCOL_UDP 17
 
 typedef uint32_t ip_addr_t; // 型エイリアスを用いて, 32bit符号なし整数をアドレス型として定義
+
+// IPアドレスとポート番号のペア
+struct ip_endpoint
+{
+  ip_addr_t addr;
+  uint16_t port;
+};
 
 // IPインタフェース構造体
 struct ip_iface
@@ -42,6 +50,11 @@ extern int ip_addr_pton(const char *p, ip_addr_t *n);
 
 // IPアドレスを, ネットワークバイトオーダーのバイナリ値(ビッグエンディアン, 見やすい)から文字列に変換
 extern char *ip_addr_ntop(ip_addr_t n, char *p, size_t size);
+
+/* IPエンドポイントの文字列とバイナリの変換関数 */
+extern int ip_endpoint_pton(const char *p, struct ip_endpoint *n);
+extern char *ip_endpoint_ntop(const struct ip_endpoint *n, char *p, size_t size);
+/* end */
 
 extern int ip_route_set_default_gateway(struct ip_iface *iface, const char *gateway);
 extern struct ip_iface *ip_route_get_iface(ip_addr_t dst);

@@ -11,6 +11,7 @@
 #include "ip.h"
 #include "icmp.h"
 #include "arp.h"
+#include "udp.h"
 
 // プロトコル構造体
 struct net_protocol
@@ -408,6 +409,13 @@ int net_init(void)
   if (arp_init() == -1)
   {
     errorf("arp_init() failure");
+    return -1;
+  }
+  /* end */
+  /* udpの初期化 */
+  if (udp_init() == -1)
+  {
+    errorf("udp_init() failure");
     return -1;
   }
   /* end */
