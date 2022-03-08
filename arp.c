@@ -355,10 +355,11 @@ int arp_resolve(struct net_iface *iface, ip_addr_t pa, uint8_t *ha)
       errorf("arp_cache_alloc() failure");
       return ARP_RESOLVE_ERROR; // 確保失敗
     }
+    /* 問い合わせ中パラメータを設定 */ // 問い合わせ中なのでhaは設定しない(というか設定できない)
     cache->state = ARP_RESOLVE_INCOMPLETE;
-    memcpy(cache->ha, ha, ETHER_ADDR_LEN);
     cache->pa = pa;
     gettimeofday(&(cache->timestamp), NULL);
+    /* end */
     /* end */
     mutex_unlock(&mutex);
     arp_request(iface, pa);        // arp要求送信
@@ -396,9 +397,8 @@ static void arp_timer_handler(void)
     if (entry->state != ARP_CACHE_STATE_FREE && entry->state != ARP_CACHE_STATE_STATIC) // 未使用のエントリと静的エントリは除外
     {
       /* タイムアウトしたエントリの削除 */
-      gettimeofday(&now, NULL);
       timersub(&now, &entry->timestamp, &diff);
-      if (diff.tv_sec >= ARP_CACHE_TIMEOUT)
+      if (diff.tv_sec > ARP_CACHE_TIMEOUT)
       {
         arp_cache_delete(entry);
       }
