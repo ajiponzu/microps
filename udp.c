@@ -369,6 +369,7 @@ ssize_t udp_recvfrom(int id, uint8_t *buf, size_t size, struct ip_endpoint *fore
   struct udp_pcb *pcb;
   struct udp_queue_entry *entry;
   ssize_t len;
+  printf("recvfrom....\n");
 
   mutex_lock(&mutex); // pcbはアトミックに操作
   /* idからpcbのポインタを取得 */
@@ -390,8 +391,9 @@ ssize_t udp_recvfrom(int id, uint8_t *buf, size_t size, struct ip_endpoint *fore
       break; // 取り出し成功後, ループを抜ける
     }
     pcb->wc++; // waitカウントをインクリメントし, ミューテックスをアンロック
+    printf("waiting msg in recvfrom()\n");
     mutex_unlock(&mutex);
-    usleep(10000);                           // 受信キューにエントリが追加されるのを待つ(1秒おきに確認). 入れないとビジーウェイトになってcpu使用率がえらいことになる
+    sleep(1);                                // 受信キューにエントリが追加されるのを待つ(1秒おきに確認). 入れないとビジーウェイトになってcpu使用率がえらいことになる
     mutex_lock(&mutex);                      // ミューテックスをロック
     pcb->wc--;                               // waitカウントをデクリメント
     if (pcb->state == UDP_PCB_STATE_CLOSING) // stateがclosingのpcbを解放してエラーを返す

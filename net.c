@@ -270,7 +270,7 @@ int net_timer_handler(void)
     {
       /* タイマーの発火 */
       timer->handler();
-      gettimeofday(&timer->last, NULL);
+      timer->last = now;
       /* end */
     }
   }

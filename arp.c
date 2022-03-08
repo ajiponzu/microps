@@ -117,7 +117,7 @@ static void arp_cache_delete(struct arp_cache *cache)
   cache->state = ARP_CACHE_STATE_FREE;
   cache->pa = 0;
   memset(cache->ha, 0, ETHER_ADDR_LEN); // 配列の要素全てを特定の値にするときはmemsetを使用する
-  timerclear(&(cache->timestamp));
+  timerclear(&cache->timestamp);
   /* end */
 }
 
@@ -418,7 +418,11 @@ int arp_init(void)
   }
 
   /* arpのタイマーハンドラーを登録 */
-  net_timer_register(interval, arp_timer_handler);
+  if (net_timer_register(interval, arp_timer_handler) == -1)
+  {
+    errorf("net_timer_register() failure");
+    return -1;
+  }
   /* end */
 
   return 0;

@@ -1,0 +1,114 @@
+03:15:45.250 [I] net_protocol_register: registered, type=0x0800 (net.c:226)
+03:15:45.250 [I] ip_protocol_register: registered, type=1 (ip.c:384)
+03:15:45.250 [I] net_protocol_register: registered, type=0x0806 (net.c:226)
+03:15:45.250 [I] net_timer_register: registered: interval={1, 0} (net.c:253)
+03:15:45.250 [I] ip_protocol_register: registered, type=17 (ip.c:384)
+03:15:45.250 [I] net_init: initialized (net.c:422)
+03:15:45.250 [I] net_device_register: registered, dev=net0, type=0x0001 (net.c:72)
+03:15:45.250 [D] intr_request_irq: irq=36, flags=1, name=net0 (platform/linux/intr.c:35)
+03:15:45.250 [D] intr_request_irq: registered: irq=36, name=net0 (platform/linux/intr.c:70)
+03:15:45.250 [D] loopback_init: initialized, dev=net0 (driver/loopback.c:155)
+03:15:45.250 [I] ip_route_add: route added: network=127.0.0.0, netmask=255.0.0.0, nexthop=0.0.0.0, iface=127.0.0.1 dev=net0 (ip.c:115)
+03:15:45.250 [I] ip_iface_register: registered: dev=net0, unicast=127.0.0.1, netmask=255.0.0.0, broadcast=127.255.255.255 (ip.c:254)
+03:15:45.250 [I] net_device_register: registered, dev=net1, type=0x0002 (net.c:72)
+03:15:45.250 [D] intr_request_irq: irq=37, flags=1, name=net1 (platform/linux/intr.c:35)
+03:15:45.250 [D] intr_request_irq: registered: irq=37, name=net1 (platform/linux/intr.c:70)
+03:15:45.250 [I] ether_tap_init: ethernet device initialized, dev=net1 (platform/linux/driver/ether_tap.c:249)
+03:15:45.250 [I] ip_route_add: route added: network=192.0.2.0, netmask=255.255.255.0, nexthop=0.0.0.0, iface=192.0.2.2 dev=net1 (ip.c:115)
+03:15:45.250 [I] ip_iface_register: registered: dev=net1, unicast=192.0.2.2, netmask=255.255.255.0, broadcast=192.0.2.255 (ip.c:254)
+03:15:45.250 [I] ip_route_add: route added: network=0.0.0.0, netmask=0.0.0.0, nexthop=192.0.2.1, iface=192.0.2.2 dev=net1 (ip.c:115)
+03:15:45.250 [D] intr_thread: start... (platform/linux/intr.c:111)
+03:15:45.251 [D] net_run: open all devices... (net.c:359)
+03:15:45.251 [I] net_device_open: dev=net1, state=up (net.c:98)
+03:15:45.251 [I] net_device_open: dev=net0, state=up (net.c:98)
+03:15:45.251 [D] net_run: running... (net.c:366)
+03:15:45.251 [D] udp_bind: bound, id=0, local=0.0.0.0:7 (udp.c:303)
+03:15:45.251 [D] main: waiting for data... (test/step20-1.c:138)
+03:15:45.283 [D] intr_thread: irq=37, name=net1 (platform/linux/intr.c:157)
+03:15:46.253 [D] intr_thread: irq=37, name=net1 (platform/linux/intr.c:157)
+03:16:45.213 [D] intr_thread: irq=37, name=net1 (platform/linux/intr.c:157)
+03:21:48.906 [D] intr_thread: irq=37, name=net1 (platform/linux/intr.c:157)
+03:21:48.906 [D] ether_input_helper: dev=net1, type=0x0806, len=42 (ether.c:129)
+        src: e2:94:b4:49:70:2c
+        dst: ff:ff:ff:ff:ff:ff
+       type: 0x0806
+03:21:48.906 [D] net_input_handler: queue pushed (num:1), dev=net1, type=0x0806, len=28 (net.c:310)
+03:21:48.906 [D] net_softirq_handler: queue popped (num: 0), dev=net1, type=0x0806, len=28 (net.c:337)
+03:21:48.906 [D] arp_input: dev=net1, len=28 (arp.c:293)
+        hrd: 0x0001
+        pro: 0x0800
+        hln: 6
+        pln: 4
+         op: 1 (Request)
+        sha: e2:94:b4:49:70:2c
+        spa: 192.0.2.1
+        tha: 00:00:00:00:00:00
+        tpa: 192.0.2.2
+03:21:48.906 [E] arp_cache_update: arp_cache_select() failure (arp.c:171)
+03:21:48.906 [D] arp_cache_insert: INSERT: pa=192.0.2.1, ha=e2:94:b4:49:70:2c (arp.c:207)
+03:21:48.906 [D] arp_reply: dev=net1, len=28 (arp.c:255)
+        hrd: 0x0001
+        pro: 0x0800
+        hln: 6
+        pln: 4
+         op: 2 (Reply)
+        sha: 00:00:5e:00:53:01
+        spa: 192.0.2.2
+        tha: e2:94:b4:49:70:2c
+        tpa: 192.0.2.1
+03:21:48.906 [D] net_device_output: dev=net1, type=0x0806, len=28 (net.c:185)
+03:21:48.906 [D] ether_transmit_helper: dev=net1, type=0x0806, len=60 (ether.c:96)
+        src: 00:00:5e:00:53:01
+        dst: e2:94:b4:49:70:2c
+       type: 0x0806
+03:21:48.906 [D] intr_thread: irq=37, name=net1 (platform/linux/intr.c:157)
+03:21:48.907 [D] ether_input_helper: dev=net1, type=0x0800, len=45 (ether.c:129)
+        src: e2:94:b4:49:70:2c
+        dst: 00:00:5e:00:53:01
+       type: 0x0800
+03:21:48.907 [D] net_input_handler: queue pushed (num:1), dev=net1, type=0x0800, len=31 (net.c:310)
+03:21:48.907 [D] net_softirq_handler: queue popped (num: 0), dev=net1, type=0x0800, len=31 (net.c:337)
+03:21:48.907 [D] ip_input: dev=net1, iface=192.0.2.2, protocol=17, total=31 (ip.c:468)
+       vhl: 0x45 [v: 4, hl: 5 (20)]
+       tos: 0x00
+     total: 31 (payload: 11)
+        id: 2424
+    offset: 0x4000 [flags=2, offset=0]
+       ttl: 64
+  protocol: 17
+       sum: 0xad52
+       src: 192.0.2.1
+       dst: 192.0.2.2
+03:21:48.907 [D] udp_input: 192.0.2.1:40519 => 192.0.2.2:7, len=11 (payload=3) (udp.c:216)
+        src: 40519
+        dst: 7
+        len: 11
+        sum: 0x6c1e
+03:21:48.907 [D] udp_input: queue pushed: id=0, num=1 (udp.c:247)
+03:21:49.348 [D] main: 3 bytes data form 192.0.2.1:40519 (test/step20-1.c:149)
++------+-------------------------------------------------+------------------+
+| 0000 | 67 67 0a                                        | gg.              |
++------+-------------------------------------------------+------------------+
+03:21:49.348 [D] udp_sendto: select local address, addr=192.0.2.2 (udp.c:339)
+03:21:49.348 [D] udp_output: 192.0.2.2:7 => 192.0.2.1:40519, len=11 (payload=3) (udp.c:456)
+        src: 7
+        dst: 40519
+        len: 11
+        sum: 0x6c1e
+03:21:49.349 [D] ip_output_core: dev=net1, dst=192.0.2.1, protocol=17, len=31 (ip.c:540)
+       vhl: 0x45 [v: 4, hl: 5 (20)]
+       tos: 0x00
+     total: 31 (payload: 11)
+        id: 128
+    offset: 0x0000 [flags=0, offset=0]
+       ttl: 255
+  protocol: 17
+       sum: 0x374a
+       src: 192.0.2.2
+       dst: 192.0.2.1
+03:21:49.349 [D] arp_resolve: resolved, pa=192.0.2.1, ha=e2:94:b4:49:70:2c (arp.c:381)
+03:21:49.349 [D] net_device_output: dev=net1, type=0x0800, len=31 (net.c:185)
+03:21:49.349 [D] ether_transmit_helper: dev=net1, type=0x0800, len=60 (ether.c:96)
+        src: 00:00:5e:00:53:01
+        dst: e2:94:b4:49:70:2c
+       type: 0x0800

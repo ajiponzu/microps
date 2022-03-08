@@ -111,7 +111,7 @@ static void cleanup(void)
 
 int main(int argc, char *argv[])
 {
-  int soc;
+  int soc = 0;
   struct ip_endpoint local, foreign;
   uint8_t buf[1024];
   ssize_t ret;
