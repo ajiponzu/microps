@@ -12,4 +12,13 @@ extern ssize_t udp_output(struct ip_endpoint *src, struct ip_endpoint *dst, cons
 // udpの初期化. ipの上位プロトコルとして登録
 extern int udp_init(void);
 
+// ソケットオープン. コントロールブロックの確保と初期化(アプリケーション)
+extern int udp_open(void);
+
+// ソケットバインド. アドレスとポートの紐づけ(アプリケーション)
+extern int udp_bind(int index, struct ip_endpoint *local);
+
+// ソケットクローズ. コントロールブロックの解放(アプリケーション)
+extern int udp_close(int id);
+
 #endif
