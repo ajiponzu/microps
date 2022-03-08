@@ -43,6 +43,9 @@ extern int ip_addr_pton(const char *p, ip_addr_t *n);
 // IPアドレスを, ネットワークバイトオーダーのバイナリ値(ビッグエンディアン, 見やすい)から文字列に変換
 extern char *ip_addr_ntop(ip_addr_t n, char *p, size_t size);
 
+extern int ip_route_set_default_gateway(struct ip_iface *iface, const char *gateway);
+extern struct ip_iface *ip_route_get_iface(ip_addr_t dst);
+
 // IPインタフェース構造体のメモリ確保
 extern struct ip_iface *ip_iface_alloc(const char *addr, const char *netmask);
 

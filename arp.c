@@ -346,12 +346,13 @@ int arp_resolve(struct net_iface *iface, ip_addr_t pa, uint8_t *ha)
   cache = arp_cache_select(pa); // プロトコルアドレスをキーとしてarpキャッシュを検索
   if (!cache)                   // 見つからないならエラー
   {
-    char addr[IP_ADDR_STR_LEN];
-    errorf("cache not found, pa=%s", ip_addr_ntop(pa, addr, IP_ADDR_STR_LEN));
+    errorf("cache not found, pa=%s", ip_addr_ntop(pa, addr1, IP_ADDR_STR_LEN));
     /* arpキャッシュに問い合わせ中のエントリを作成 */
     cache = arp_cache_alloc();
     if (!cache)
     {
+      mutex_unlock(&mutex);
+      errorf("arp_cache_alloc() failure");
       return ARP_RESOLVE_ERROR; // 確保失敗
     }
     cache->state = ARP_RESOLVE_INCOMPLETE;
