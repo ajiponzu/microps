@@ -65,6 +65,7 @@ static int loopback_transmit(struct net_device *dev, uint16_t type, const uint8_
   void *ret = queue_push(&PRIV(dev)->queue, entry);
   if (!ret)
   {
+    mutex_unlock(&PRIV(dev)->mutex);
     errorf("queue_push() failure");
     return -1;
   }
