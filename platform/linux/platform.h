@@ -70,6 +70,7 @@ static inline int mutex_unlock(mutex_t *mutex)
     return pthread_mutex_unlock(mutex);
 }
 
+// タスクスケジューラ
 struct sched_ctx
 {
     pthread_cond_t cond;
@@ -82,10 +83,19 @@ struct sched_ctx
         PTHREAD_COND_INITIALIZER, 0, 0 \
     }
 
+// スケジューラの初期化
 extern int sched_ctx_init(struct sched_ctx *ctx);
+
+// 条件変数の破棄(待機中のスレッドが存在する場合はエラー)
 extern int sched_ctx_destroy(struct sched_ctx *ctx);
+
+// タスクの休止
 extern int sched_sleep(struct sched_ctx *ctx, mutex_t *mutex, const struct timespec *abstime);
+
+// 休止中タスクの再開
 extern int sched_wakeup(struct sched_ctx *ctx);
+
+// interruptedフラグを立てたうえで, 休止スレッドを再開させる. つまり割り込む
 extern int sched_interrupt(struct sched_ctx *ctx);
 
 #endif

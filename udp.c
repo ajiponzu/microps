@@ -49,7 +49,7 @@ struct udp_pcb
   int state;
   struct ip_endpoint local; // 自分のアドレスとポート
   struct queue_head queue;  /* receive queue */
-  int wc;                   // waitカウント(pcbを使用中のスレッド数)
+  struct sched_ctx ctx;     // スケジューラのコンテキスト
 };
 
 // 受信キュー(受信データのプール)のノード
@@ -91,6 +91,7 @@ static struct udp_pcb *udp_pcb_alloc(void)
     if (pcb->state == UDP_PCB_STATE_FREE)
     {
       pcb->state = UDP_PCB_STATE_OPEN;
+      sched_ctx_init(&pcb->ctx);
       return pcb;
     }
     /* end */
@@ -103,13 +104,16 @@ static void udp_pcb_release(struct udp_pcb *pcb)
 {
   struct queue_entry *entry;
 
-  /* waitカウントが0でないと解放できないので, closing状態にして抜ける */
-  // waitは参照カウント？
-  if (pcb->wc)
+  pcb->state = UDP_PCB_STATE_CLOSING;
+  /* クローズされたことを休止中のタスクに知らせるために起床させる.
+    ただし, shced_ctx_destroy() がエラーを返すのは休止中のタスクが存在する場合のみ
+  */
+  if (sched_ctx_destroy(&pcb->ctx) == -1)
   {
-    pcb->state = UDP_PCB_STATE_CLOSING;
+    sched_wakeup(&pcb->ctx);
     return;
   }
+
   /* end */
 
   /* 値をクリア. 空きを作らないと, 次のブロックの確保のとき困る */
@@ -246,6 +250,7 @@ static void udp_input(const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t 
   /* end */
 
   debugf("queue pushed: id=%d, num=%d", udp_pcb_id(pcb), pcb->queue.num);
+  sched_wakeup(&pcb->ctx); // 受信キューにエントリが追加されたことを休止中のタスクに知らせるために再開させる
   mutex_unlock(&mutex);
 }
 
@@ -370,7 +375,7 @@ ssize_t udp_recvfrom(int id, uint8_t *buf, size_t size, struct ip_endpoint *fore
   struct udp_pcb *pcb;
   struct udp_queue_entry *entry;
   ssize_t len;
-  printf("recvfrom....\n");
+  int err;
 
   mutex_lock(&mutex); // pcbはアトミックに操作
   /* idからpcbのポインタを取得 */
@@ -391,12 +396,14 @@ ssize_t udp_recvfrom(int id, uint8_t *buf, size_t size, struct ip_endpoint *fore
     {
       break; // 取り出し成功後, ループを抜ける
     }
-    pcb->wc++; // waitカウントをインクリメントし, ミューテックスをアンロック
-    printf("waiting msg in recvfrom()\n");
-    mutex_unlock(&mutex);
-    sleep(1);                                // 受信キューにエントリが追加されるのを待つ(1秒おきに確認). 入れないとビジーウェイトになってcpu使用率がえらいことになる
-    mutex_lock(&mutex);                      // ミューテックスをロック
-    pcb->wc--;                               // waitカウントをデクリメント
+    err = sched_sleep(&pcb->ctx, &mutex, NULL); // sched_wakeup() or sched_interrupt()が呼ばれるまでタスク休止
+    if (err)                                    // sched_interrup()による再開なので, errorならerrnoにeintrを設定してエラーを返す
+    {
+      debugf("interrupted");
+      mutex_unlock(&mutex);
+      errno = EINTR;
+      return -1;
+    }
     if (pcb->state == UDP_PCB_STATE_CLOSING) // stateがclosingのpcbを解放してエラーを返す
     {
       debugf("closed");
@@ -471,8 +478,23 @@ ssize_t udp_output(struct ip_endpoint *src, struct ip_endpoint *dst, const uint8
   return len;
 }
 
+// イベントハンドラ
 static void event_handler(void *arg)
 {
+  struct udp_pcb *pcb;
+
+  (void)arg;
+  mutex_lock(&mutex);
+  for (pcb = pcbs; pcb < tailof(pcbs); pcb++)
+  {
+    /* 有効なpcbのコンテキスト全てに割り込みを発生させる */
+    if (pcb->state == UDP_PCB_STATE_OPEN)
+    {
+      sched_interrupt(&pcb->ctx);
+    }
+    /* end */
+  }
+  mutex_unlock(&mutex);
 }
 
 int udp_init(void)
@@ -482,6 +504,14 @@ int udp_init(void)
     errorf("ip_protocol_register() failure");
     return -1;
   }
+
+  /* イベントの購読 */
+  if (net_event_subscribe(event_handler, NULL) == -1)
+  {
+    errorf("net_event_subscribe() failure");
+    return -1;
+  }
+  /* end */
 
   return 0;
 }

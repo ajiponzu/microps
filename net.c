@@ -354,14 +354,38 @@ int net_softirq_handler(void)
 
 int net_event_subscribe(void (*handler)(void *arg), void *arg)
 {
+  struct net_event *event;
+
+  event = memory_alloc(sizeof(*event));
+  if (!event)
+  {
+    errorf("memory_alloc() failure");
+    return -1;
+  }
+  event->handler = handler;
+  event->arg = arg;
+  event->next = events;
+  events = event;
+  return 0;
 }
 
 int net_event_handler(void)
 {
+  struct net_event *event;
+
+  /* イベントを購読している全てのハンドラを呼び出す */
+  for (event = events; event; event = event->next)
+  {
+    event->handler(event->arg);
+  }
+  /* end */
+
+  return 0;
 }
 
 void net_raise_event()
 {
+  intr_raise_irq(INTR_IRQ_EVENT); // イベント割り込みを発生
 }
 
 int net_run(void)
