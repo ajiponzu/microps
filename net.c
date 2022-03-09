@@ -39,9 +39,17 @@ struct net_timer
   void (*handler)(void);   // 発火時に呼び出す関数へのポインタ
 };
 
+struct net_event
+{
+  struct net_event *next;
+  void (*handler)(void *arg);
+  void *arg;
+};
+
 static struct net_device *devices;     // デバイスリスト(のヘッドポインタ)
 static struct net_protocol *protocols; // 登録済みのプロトコルリスト(のヘッドポインタ)
 static struct net_timer *timers;       // タイマーリスト(のヘッドポインタ)
+static struct net_event *events;
 
 struct net_device *net_device_alloc(void)
 {
@@ -342,6 +350,18 @@ int net_softirq_handler(void)
   }
 
   return 0;
+}
+
+int net_event_subscribe(void (*handler)(void *arg), void *arg)
+{
+}
+
+int net_event_handler(void)
+{
+}
+
+void net_raise_event()
+{
 }
 
 int net_run(void)

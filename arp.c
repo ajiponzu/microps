@@ -344,7 +344,7 @@ int arp_resolve(struct net_iface *iface, ip_addr_t pa, uint8_t *ha)
 
   mutex_lock(&mutex);           // arpキャッシュへのアクセスをmutexで保護
   cache = arp_cache_select(pa); // プロトコルアドレスをキーとしてarpキャッシュを検索
-  if (!cache)                   // 見つからないならエラー
+  if (!cache)
   {
     errorf("cache not found, pa=%s", ip_addr_ntop(pa, addr1, IP_ADDR_STR_LEN));
     /* arpキャッシュに問い合わせ中のエントリを作成 */

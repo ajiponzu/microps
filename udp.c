@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "util.h"
 #include "ip.h"
@@ -451,7 +452,7 @@ ssize_t udp_output(struct ip_endpoint *src, struct ip_endpoint *dst, const uint8
   pseudo.protocol = IP_PROTOCOL_UDP;
   /* チェックサム導出 */
   psum = ~cksum16((uint16_t *)&pseudo, sizeof(pseudo), 0);
-  hdr->sum = cksum16((uint16_t *)hdr, hdr->len, psum);
+  hdr->sum = cksum16((uint16_t *)hdr, total, psum); // ただし, host環境でチェックするため, cksumのcountにはホストバイトオーダーのレングスを渡す
   /* end */
   /* end */
 
@@ -468,6 +469,10 @@ ssize_t udp_output(struct ip_endpoint *src, struct ip_endpoint *dst, const uint8
   /* end */
 
   return len;
+}
+
+static void event_handler(void *arg)
+{
 }
 
 int udp_init(void)
