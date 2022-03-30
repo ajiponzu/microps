@@ -212,7 +212,7 @@ static void udp_input(const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t 
   pseudo.protocol = IP_PROTOCOL_UDP;
   pseudo.len = hton16(len);
   /* end */
-  psum = ~cksum16((uint16_t *)&pseudo, sizeof(pseudo), 0); // 疑似ヘッダ部分のチェックサムを計算（計算結果はビット反転されているので戻しておく. ここで求めているのは途中結果なので反転されると困る）
+  psum = ~cksum16((uint16_t *)&pseudo, sizeof(pseudo), 0); // 疑似ヘッダ部分のチェックサムを計算（計算結果はビット反転されているので戻しておく. ここで求めているのは途中結果なので反転されると困る. 関数内で反転しちゃうから）
   if (cksum16((uint16_t *)hdr, len, psum) != 0)            // cksum16() の第三引数に psum を渡すことで続きを計算できる. ここは最終結果なので, 反転されているのが正解
   {
     errorf("checksum error: sum=0x%04x, verify=0x%04x", ntoh16(hdr->sum), ntoh16(cksum16((uint16_t *)hdr, len, -hdr->sum + psum)));
