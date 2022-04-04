@@ -468,7 +468,7 @@ ssize_t udp_output(struct ip_endpoint *src, struct ip_endpoint *dst, const uint8
   udp_dump((uint8_t *)hdr, total);
 
   /* IPの送信関数を呼び出す */
-  if (!ip_output(pseudo.protocol, buf, total, src->addr, dst->addr))
+  if (ip_output(pseudo.protocol, buf, total, src->addr, dst->addr) == -1)
   {
     errorf("ip_output() failure");
     return -1;
