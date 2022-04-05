@@ -6,19 +6,18 @@
 #include <sys/types.h>
 #include <errno.h>
 
+#include "platform.h"
+
 #include "util.h"
 #include "ip.h"
 #include "tcp.h"
-#include "platform.h"
 
-/* TCPヘッダのフラグフィールドの値 */
 #define TCP_FLG_FIN 0x01
 #define TCP_FLG_SYN 0x02
 #define TCP_FLG_RST 0x04
 #define TCP_FLG_PSH 0x08
 #define TCP_FLG_ACK 0x10
 #define TCP_FLG_URG 0x20
-/* end */
 
 #define TCP_FLG_IS(x, y) ((x & 0x3f) == (y))
 #define TCP_FLG_ISSET(x, y) ((x & 0x3f) & (y) ? 1 : 0)
@@ -38,6 +37,31 @@
 #define TCP_PCB_STATE_CLOSE_WAIT 10
 #define TCP_PCB_STATE_LAST_ACK 11
 
+#define TCP_DEFAULT_RTO 200000     /* micro seconds */
+#define TCP_RETRANSMIT_DEADLINE 12 /* seconds */
+
+struct pseudo_hdr
+{
+  uint32_t src;
+  uint32_t dst;
+  uint8_t zero;
+  uint8_t protocol;
+  uint16_t len;
+};
+
+struct tcp_hdr
+{
+  uint16_t src;
+  uint16_t dst;
+  uint32_t seq;
+  uint32_t ack;
+  uint8_t off;
+  uint8_t flg;
+  uint16_t wnd;
+  uint16_t sum;
+  uint16_t up;
+};
+
 struct tcp_segment_info
 {
   uint32_t seq;
@@ -47,7 +71,6 @@ struct tcp_segment_info
   uint16_t up;
 };
 
-// コントロールブロック構造体
 struct tcp_pcb
 {
   int state;
@@ -74,36 +97,25 @@ struct tcp_pcb
   uint16_t mss;
   uint8_t buf[65535]; /* receive buffer */
   struct sched_ctx ctx;
+  struct queue_head queue; /* retransmit queue */
+};
+
+struct tcp_queue_entry
+{
+  struct timeval first;
+  struct timeval last;
+  unsigned int rto; /* micro seconds */
+  uint32_t seq;
+  uint8_t flg;
+  size_t len;
+  uint8_t data[];
 };
 
 static mutex_t mutex = MUTEX_INITIALIZER;
 static struct tcp_pcb pcbs[TCP_PCB_SIZE];
 
-// 疑似ヘッダの構造体 (チェックサム計算時のみ使用)
-struct pseudo_hdr
-{
-  uint32_t src;
-  uint32_t dst;
-  uint8_t zero;
-  uint8_t protocol;
-  uint16_t len;
-};
-
-// TCPヘッダの構造体
-struct tcp_hdr
-{
-  uint16_t src; // 送信先ポート
-  uint16_t dst; // 宛先ポート
-  uint32_t seq;
-  uint32_t ack;
-  uint8_t off;
-  uint8_t flg;
-  uint16_t wnd;
-  uint16_t sum;
-  uint16_t up;
-};
-
-static char *tcp_flg_ntoa(uint8_t flg)
+static char *
+tcp_flg_ntoa(uint8_t flg)
 {
   static char str[9];
 
@@ -117,8 +129,8 @@ static char *tcp_flg_ntoa(uint8_t flg)
   return str;
 }
 
-// tcpセグメントデバッグ出力
-static void tcp_dump(const uint8_t *data, size_t len)
+static void
+tcp_dump(const uint8_t *data, size_t len)
 {
   struct tcp_hdr *hdr;
 
@@ -139,13 +151,17 @@ static void tcp_dump(const uint8_t *data, size_t len)
   funlockfile(stderr);
 }
 
-// 新規コントロールブロックの領域確保
-static struct tcp_pcb *tcp_pcb_alloc(void)
+/*
+ * TCP Protocol Control Block (PCB)
+ *
+ * NOTE: TCP PCB functions must be called after mutex locked
+ */
+
+static struct tcp_pcb *
+tcp_pcb_alloc(void)
 {
   struct tcp_pcb *pcb;
 
-  /* FREE 状態のPCBを見つけて返す
-    ・CLOSED状態に初期化する */
   for (pcb = pcbs; pcb < tailof(pcbs); pcb++)
   {
     if (pcb->state == TCP_PCB_STATE_FREE)
@@ -155,32 +171,28 @@ static struct tcp_pcb *tcp_pcb_alloc(void)
       return pcb;
     }
   }
-  /* end */
   return NULL;
 }
 
-// コントロールブロックの領域解放
-static void tcp_pcb_release(struct tcp_pcb *pcb)
+static void
+tcp_pcb_release(struct tcp_pcb *pcb)
 {
   char ep1[IP_ENDPOINT_STR_LEN];
   char ep2[IP_ENDPOINT_STR_LEN];
 
-  /* pcb利用しているタスクがいたらこのタイミングでは解放できない
-    ・タスクを起床させてる（他のタスクに解放を任せる）*/
   if (sched_ctx_destroy(&pcb->ctx) == -1)
   {
     sched_wakeup(&pcb->ctx);
     return;
   }
-  /* end */
   debugf("released, local=%s, foreign=%s",
          ip_endpoint_ntop(&pcb->local, ep1, sizeof(ep1)),
          ip_endpoint_ntop(&pcb->foreign, ep2, sizeof(ep2)));
   memset(pcb, 0, sizeof(*pcb)); /* pcb->state is set to TCP_PCB_STATE_FREE (0) */
 }
 
-// コントロールブロックの選択
-static struct tcp_pcb *tcp_pcb_select(struct ip_endpoint *local, struct ip_endpoint *foreign)
+static struct tcp_pcb *
+tcp_pcb_select(struct ip_endpoint *local, struct ip_endpoint *foreign)
 {
   struct tcp_pcb *pcb, *listen_pcb = NULL;
 
@@ -188,21 +200,14 @@ static struct tcp_pcb *tcp_pcb_select(struct ip_endpoint *local, struct ip_endpo
   {
     if ((pcb->local.addr == IP_ADDR_ANY || pcb->local.addr == local->addr) && pcb->local.port == local->port)
     {
-      /* ローカルアドレスに bind 可能かどうか調べるときは外部アドレスを指定せずに呼ばれる
-        ・ローカルアドレスがマッチしているので返す */
       if (!foreign)
       {
         return pcb;
       }
-      /* end */
-      /* ローカルアドレスと外部アドレスが共にマッチ */
       if (pcb->foreign.addr == foreign->addr && pcb->foreign.port == foreign->port)
       {
         return pcb;
       }
-      /* end */
-      /* 外部アドレスを指定せずに LISTEN していたらどんな外部アドレスでもマッチする
-        ・ローカルアドレス/外部アドレス共にマッチしたものが優先されるのですぐには返さない */
       if (pcb->state == TCP_PCB_STATE_LISTEN)
       {
         if (pcb->foreign.addr == IP_ADDR_ANY && pcb->foreign.port == 0)
@@ -211,13 +216,13 @@ static struct tcp_pcb *tcp_pcb_select(struct ip_endpoint *local, struct ip_endpo
           listen_pcb = pcb;
         }
       }
-      /* end */
     }
   }
   return listen_pcb;
 }
 
-static struct tcp_pcb *tcp_pcb_get(int id)
+static struct tcp_pcb *
+tcp_pcb_get(int id)
 {
   struct tcp_pcb *pcb;
 
@@ -234,13 +239,14 @@ static struct tcp_pcb *tcp_pcb_get(int id)
   return pcb;
 }
 
-static int tcp_pcb_id(struct tcp_pcb *pcb)
+static int
+tcp_pcb_id(struct tcp_pcb *pcb)
 {
   return indexof(pcbs, pcb);
 }
 
-static ssize_t tcp_output_segment(uint32_t seq, uint32_t ack, uint8_t flg, uint16_t wnd, uint8_t *data, size_t len, struct ip_endpoint *local,
-                                  struct ip_endpoint *foreign)
+static ssize_t
+tcp_output_segment(uint32_t seq, uint32_t ack, uint8_t flg, uint16_t wnd, uint8_t *data, size_t len, struct ip_endpoint *local, struct ip_endpoint *foreign)
 {
   uint8_t buf[IP_PAYLOAD_SIZE_MAX] = {};
   struct tcp_hdr *hdr;
@@ -251,69 +257,141 @@ static ssize_t tcp_output_segment(uint32_t seq, uint32_t ack, uint8_t flg, uint1
   char ep2[IP_ENDPOINT_STR_LEN];
 
   hdr = (struct tcp_hdr *)buf;
-
-  /* TCPセグメントの生成 */
   hdr->src = local->port;
   hdr->dst = foreign->port;
   hdr->seq = hton32(seq);
   hdr->ack = hton32(ack);
-  hdr->off = (sizeof(*hdr) >> 2) << 4; // ヘッダサイズを4バイト単位で表す
+  hdr->off = (sizeof(*hdr) >> 2) << 4;
   hdr->flg = flg;
   hdr->wnd = hton16(wnd);
-  hdr->up = 0;
   hdr->sum = 0;
-  /* 疑似ヘッダの生成 */
+  hdr->up = 0;
+  memcpy(hdr + 1, data, len);
   pseudo.src = local->addr;
   pseudo.dst = foreign->addr;
   pseudo.zero = 0;
   pseudo.protocol = IP_PROTOCOL_TCP;
-  pseudo.len = hton16(len);
-  /* end */
-  /* チェックサムの計算 */
-  total = len + sizeof(*hdr);
+  total = sizeof(*hdr) + len;
+  pseudo.len = hton16(total);
   psum = ~cksum16((uint16_t *)&pseudo, sizeof(pseudo), 0);
   hdr->sum = cksum16((uint16_t *)hdr, total, psum);
-  /* end */
-  /* end */
-
   debugf("%s => %s, len=%zu (payload=%zu)",
          ip_endpoint_ntop(local, ep1, sizeof(ep1)),
          ip_endpoint_ntop(foreign, ep2, sizeof(ep2)),
          total, len);
   tcp_dump((uint8_t *)hdr, total);
-
-  /* IPの送信関数を呼び出す */
   if (ip_output(IP_PROTOCOL_TCP, (uint8_t *)hdr, total, local->addr, foreign->addr) == -1)
   {
-    errorf("ip_output() failure");
     return -1;
-  };
-  /* end */
-
+  }
   return len;
 }
 
-static ssize_t tcp_output(struct tcp_pcb *pcb, uint8_t flg, uint8_t *data, size_t len)
+/*
+ * TCP Retransmit
+ *
+ * NOTE: TCP Retransmit functions must be called after mutex locked
+ */
+
+static int
+tcp_retransmit_queue_add(struct tcp_pcb *pcb, uint32_t seq, uint8_t flg, uint8_t *data, size_t len)
+{
+  struct tcp_queue_entry *entry;
+
+  entry = memory_alloc(sizeof(*entry) + len);
+  if (!entry)
+  {
+    errorf("memory_alloc() failure");
+    return -1;
+  }
+  entry->rto = TCP_DEFAULT_RTO;
+  entry->seq = seq;
+  entry->flg = flg;
+  entry->len = len;
+  memcpy(entry->data, data, entry->len);
+  gettimeofday(&entry->first, NULL);
+  entry->last = entry->first;
+  if (!queue_push(&pcb->queue, entry))
+  {
+    errorf("queue_push() failure");
+    memory_free(entry);
+    return -1;
+  }
+  return 0;
+}
+
+static void
+tcp_retransmit_queue_cleanup(struct tcp_pcb *pcb)
+{
+  struct tcp_queue_entry *entry;
+
+  while (1)
+  {
+    entry = queue_peek(&pcb->queue);
+    if (!entry)
+    {
+      break;
+    }
+    if (entry->seq >= pcb->snd.una)
+    {
+      break;
+    }
+    entry = queue_pop(&pcb->queue);
+    debugf("remove, seq=%u, flags=%s, len=%u", entry->seq, tcp_flg_ntoa(entry->flg), entry->len);
+    memory_free(entry);
+  }
+  return;
+}
+
+static void
+tcp_retransmit_queue_emit(void *arg, void *data)
+{
+  struct tcp_pcb *pcb;
+  struct tcp_queue_entry *entry;
+  struct timeval now, diff, timeout;
+
+  pcb = (struct tcp_pcb *)arg;
+  entry = (struct tcp_queue_entry *)data;
+  gettimeofday(&now, NULL);
+  timersub(&now, &entry->first, &diff);
+  if (diff.tv_sec >= TCP_RETRANSMIT_DEADLINE)
+  {
+    pcb->state = TCP_PCB_STATE_CLOSED;
+    sched_wakeup(&pcb->ctx);
+    return;
+  }
+  timeout = entry->last;
+  timeval_add_usec(&timeout, entry->rto);
+  if (timercmp(&now, &timeout, >))
+  {
+    tcp_output_segment(entry->seq, pcb->rcv.nxt, entry->flg, pcb->rcv.wnd, entry->data, entry->len, &pcb->local, &pcb->foreign);
+    entry->last = now;
+    entry->rto *= 2;
+  }
+}
+
+static ssize_t
+tcp_output(struct tcp_pcb *pcb, uint8_t flg, uint8_t *data, size_t len)
 {
   uint32_t seq;
 
   seq = pcb->snd.nxt;
-  /* SYNフラグが指定されるのは初回送信時なので iss（初期送信シーケンス番号）を使う */
   if (TCP_FLG_ISSET(flg, TCP_FLG_SYN))
   {
     seq = pcb->iss;
   }
-  /* end */
   if (TCP_FLG_ISSET(flg, TCP_FLG_SYN | TCP_FLG_FIN) || len)
   {
-    /* TODO: add retransmission queue */
+    tcp_retransmit_queue_add(pcb, seq, flg, data, len);
   }
-  return tcp_output_segment(seq, pcb->rcv.nxt, flg, pcb->rcv.wnd, data, len, &pcb->local, &pcb->foreign); // PCBの情報を使ってTCPセグメントを送信
+  return tcp_output_segment(seq, pcb->rcv.nxt, flg, pcb->rcv.wnd, data, len, &pcb->local, &pcb->foreign);
 }
 
 /* rfc793 - section 3.9 [Event Processing > SEGMENT ARRIVES] */
-static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uint8_t *data, size_t len, struct ip_endpoint *local, struct ip_endpoint *foreign)
+static void
+tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uint8_t *data, size_t len, struct ip_endpoint *local, struct ip_endpoint *foreign)
 {
+  int acceptable = 0;
   struct tcp_pcb *pcb;
 
   pcb = tcp_pcb_select(local, foreign);
@@ -323,7 +401,6 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
     {
       return;
     }
-    /* 使用していないポートに何か飛んで来たら RST を返す */
     if (!TCP_FLG_ISSET(flags, TCP_FLG_ACK))
     {
       tcp_output_segment(0, seg->seq + seg->len, TCP_FLG_RST | TCP_FLG_ACK, 0, NULL, 0, local, foreign);
@@ -332,7 +409,6 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
     {
       tcp_output_segment(seg->ack, 0, TCP_FLG_RST, 0, NULL, 0, local, foreign);
     }
-    /* end */
     return;
   }
   switch (pcb->state)
@@ -345,7 +421,6 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
     {
       return;
     }
-
     /*
      * 2nd check for an ACK
      */
@@ -354,7 +429,6 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
       tcp_output_segment(seg->ack, 0, TCP_FLG_RST, 0, NULL, 0, local, foreign);
       return;
     }
-
     /*
      * 3rd check for an SYN
      */
@@ -377,7 +451,6 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
       /* but processing of SYN and ACK  should not be repeated            */
       return;
     }
-
     /*
      * 4th other text or control
      */
@@ -388,7 +461,18 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
     /*
      * 1st check the ACK bit
      */
-
+    if (TCP_FLG_ISSET(flags, TCP_FLG_ACK))
+    {
+      if (seg->ack <= pcb->iss || seg->ack > pcb->snd.nxt)
+      {
+        tcp_output_segment(seg->ack, 0, TCP_FLG_RST, 0, NULL, 0, local, foreign);
+        return;
+      }
+      if (pcb->snd.una <= seg->ack && seg->ack <= pcb->snd.nxt)
+      {
+        acceptable = 1;
+      }
+    }
     /*
      * 2nd check the RST bit
      */
@@ -400,7 +484,35 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
     /*
      * 4th check the SYN bit
      */
-
+    if (TCP_FLG_ISSET(flags, TCP_FLG_SYN))
+    {
+      pcb->rcv.nxt = seg->seq + 1;
+      pcb->irs = seg->seq;
+      if (acceptable)
+      {
+        pcb->snd.una = seg->ack;
+        tcp_retransmit_queue_cleanup(pcb);
+      }
+      if (pcb->snd.una > pcb->iss)
+      {
+        pcb->state = TCP_PCB_STATE_ESTABLISHED;
+        tcp_output(pcb, TCP_FLG_ACK, NULL, 0);
+        /* NOTE: not specified in the RFC793, but send window initialization required */
+        pcb->snd.wnd = seg->wnd;
+        pcb->snd.wl1 = seg->seq;
+        pcb->snd.wl2 = seg->ack;
+        sched_wakeup(&pcb->ctx);
+        /* ignore: continue processing at the sixth step below where the URG bit is checked */
+        return;
+      }
+      else
+      {
+        pcb->state = TCP_PCB_STATE_SYN_RECEIVED;
+        tcp_output(pcb, TCP_FLG_SYN | TCP_FLG_ACK, NULL, 0);
+        /* ignore: If there are other controls or text in the segment, queue them for processing after the ESTABLISHED state has been reached */
+        return;
+      }
+    }
     /*
      * 5th, if neither of the SYN or RST bits is set then drop the segment and return
      */
@@ -415,7 +527,64 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
   /*
    * 1st check sequence number
    */
-
+  switch (pcb->state)
+  {
+  case TCP_PCB_STATE_SYN_RECEIVED:
+  case TCP_PCB_STATE_ESTABLISHED:
+  case TCP_PCB_STATE_FIN_WAIT1:
+  case TCP_PCB_STATE_FIN_WAIT2:
+  case TCP_PCB_STATE_CLOSE_WAIT:
+  case TCP_PCB_STATE_LAST_ACK:
+    if (!seg->len)
+    {
+      if (!pcb->rcv.wnd)
+      {
+        if (seg->seq == pcb->rcv.nxt)
+        {
+          acceptable = 1;
+        }
+      }
+      else
+      {
+        if (pcb->rcv.nxt <= seg->seq && seg->seq < pcb->rcv.nxt + pcb->rcv.wnd)
+        {
+          acceptable = 1;
+        }
+      }
+    }
+    else
+    {
+      if (!pcb->rcv.wnd)
+      {
+        /* not acceptable */
+      }
+      else
+      {
+        if ((pcb->rcv.nxt <= seg->seq && seg->seq < pcb->rcv.nxt + pcb->rcv.wnd) ||
+            (pcb->rcv.nxt <= seg->seq + seg->len - 1 && seg->seq + seg->len - 1 < pcb->rcv.nxt + pcb->rcv.wnd))
+        {
+          acceptable = 1;
+        }
+      }
+    }
+    if (!acceptable)
+    {
+      if (!TCP_FLG_ISSET(flags, TCP_FLG_RST))
+      {
+        tcp_output(pcb, TCP_FLG_ACK, NULL, 0);
+      }
+      return;
+    }
+    /*
+     * In the following it is assumed that the segment is the idealized
+     * segment that begins at RCV.NXT and does not exceed the window.
+     * One could tailor actual segments to fit this assumption by
+     * trimming off any portions that lie outside the window (including
+     * SYN and FIN), and only processing further if the segment then
+     * begins at RCV.NXT.  Segments with higher begining sequence
+     * numbers may be held for later processing.
+     */
+  }
   /*
    * 2nd check the RST bit
    */
@@ -431,7 +600,6 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
   /*
    * 5th check the ACK field
    */
-
   if (!TCP_FLG_ISSET(flags, TCP_FLG_ACK))
   {
     /* drop segment */
@@ -450,9 +618,57 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
       tcp_output_segment(seg->ack, 0, TCP_FLG_RST, 0, NULL, 0, local, foreign);
       return;
     }
+    /* fall through */
+  case TCP_PCB_STATE_ESTABLISHED:
+  case TCP_PCB_STATE_FIN_WAIT1:
+  case TCP_PCB_STATE_FIN_WAIT2:
+  case TCP_PCB_STATE_CLOSE_WAIT:
+    if (pcb->snd.una < seg->ack && seg->ack <= pcb->snd.nxt)
+    {
+      pcb->snd.una = seg->ack;
+      tcp_retransmit_queue_cleanup(pcb);
+      /* ignore: Users should receive positive acknowledgments for buffers
+                  which have been SENT and fully acknowledged (i.e., SEND buffer should be returned with "ok" response) */
+      if (pcb->snd.wl1 < seg->seq || (pcb->snd.wl1 == seg->seq && pcb->snd.wl2 <= seg->ack))
+      {
+        pcb->snd.wnd = seg->wnd;
+        pcb->snd.wl1 = seg->seq;
+        pcb->snd.wl2 = seg->ack;
+      }
+    }
+    else if (seg->ack < pcb->snd.una)
+    {
+      /* ignore */
+    }
+    else if (seg->ack > pcb->snd.nxt)
+    {
+      tcp_output(pcb, TCP_FLG_ACK, NULL, 0);
+      return;
+    }
+    switch (pcb->state)
+    {
+    case TCP_PCB_STATE_FIN_WAIT1:
+      if (seg->ack == pcb->snd.nxt)
+      {
+        pcb->state = TCP_PCB_STATE_FIN_WAIT2;
+      }
+      break;
+    case TCP_PCB_STATE_FIN_WAIT2:
+      /* do not delete the TCB */
+      break;
+    case TCP_PCB_STATE_CLOSE_WAIT:
+      /* do nothing */
+      break;
+    }
     break;
+  case TCP_PCB_STATE_LAST_ACK:
+    if (seg->ack == pcb->snd.nxt)
+    {
+      pcb->state = TCP_PCB_STATE_CLOSED;
+      tcp_pcb_release(pcb);
+    }
+    return;
   }
-
   /*
    * 6th, check the URG bit (ignore)
    */
@@ -460,16 +676,75 @@ static void tcp_segment_arrives(struct tcp_segment_info *seg, uint8_t flags, uin
   /*
    * 7th, process the segment text
    */
-
+  switch (pcb->state)
+  {
+  case TCP_PCB_STATE_ESTABLISHED:
+  case TCP_PCB_STATE_FIN_WAIT1:
+  case TCP_PCB_STATE_FIN_WAIT2:
+    if (len)
+    {
+      memcpy(pcb->buf + (sizeof(pcb->buf) - pcb->rcv.wnd), data, len);
+      pcb->rcv.nxt = seg->seq + seg->len;
+      pcb->rcv.wnd -= len;
+      tcp_output(pcb, TCP_FLG_ACK, NULL, 0);
+      sched_wakeup(&pcb->ctx);
+    }
+    break;
+  case TCP_PCB_STATE_CLOSE_WAIT:
+  case TCP_PCB_STATE_LAST_ACK:
+    /* ignore segment text */
+    break;
+  }
   /*
    * 8th, check the FIN bit
    */
+  if (TCP_FLG_ISSET(flags, TCP_FLG_FIN))
+  {
+    switch (pcb->state)
+    {
+    case TCP_PCB_STATE_CLOSED:
+    case TCP_PCB_STATE_LISTEN:
+      /* drop segment */
+      return;
+    }
+    pcb->rcv.nxt = seg->seq + 1;
+    tcp_output(pcb, TCP_FLG_ACK, NULL, 0);
+    switch (pcb->state)
+    {
+    case TCP_PCB_STATE_SYN_RECEIVED:
+    case TCP_PCB_STATE_ESTABLISHED:
+      pcb->state = TCP_PCB_STATE_CLOSE_WAIT;
+      sched_wakeup(&pcb->ctx);
+      break;
+    case TCP_PCB_STATE_FIN_WAIT1:
+      if (seg->ack == pcb->snd.nxt)
+      {
+        pcb->state = TCP_PCB_STATE_TIME_WAIT;
+        // tcp_set_timewait_timer(pcb);
+      }
+      else
+      {
+        pcb->state = TCP_PCB_STATE_CLOSING;
+      }
+      break;
+    case TCP_PCB_STATE_FIN_WAIT2:
+      pcb->state = TCP_PCB_STATE_TIME_WAIT;
+      // tcp_set_timewait_timer(pcb);
+      break;
+    case TCP_PCB_STATE_CLOSE_WAIT:
+      /* Remain in the CLOSE-WAIT state */
+      break;
+    case TCP_PCB_STATE_LAST_ACK:
+      /* Remain in the LAST-ACK state */
+      break;
+    }
+  }
 
   return;
 }
 
-// tcpセグメントの入力
-static void tcp_input(const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst, struct ip_iface *iface)
+static void
+tcp_input(const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t dst, struct ip_iface *iface)
 {
   struct tcp_hdr *hdr;
   struct pseudo_hdr pseudo;
@@ -486,43 +761,32 @@ static void tcp_input(const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t 
     return;
   }
   hdr = (struct tcp_hdr *)data;
-  /* 疑似ヘッダの構築 */
   pseudo.src = src;
   pseudo.dst = dst;
   pseudo.zero = 0;
   pseudo.protocol = IP_PROTOCOL_TCP;
   pseudo.len = hton16(len);
-  /* end */
-
   psum = ~cksum16((uint16_t *)&pseudo, sizeof(pseudo), 0);
-  /* チェックサムの検証 */
   if (cksum16((uint16_t *)hdr, len, psum) != 0)
   {
     errorf("checksum error: sum=0x%04x, verify=0x%04x", ntoh16(hdr->sum), ntoh16(cksum16((uint16_t *)hdr, len, -hdr->sum + psum)));
     return;
   }
-  /* end */
-
-  /* アドレスのチェック */
-  if (src == iface->broadcast || dst == iface->broadcast)
+  if (src == IP_ADDR_BROADCAST || src == iface->broadcast || dst == IP_ADDR_BROADCAST || dst == iface->broadcast)
   {
-    errorf("This address is not a broadcast addres");
+    errorf("only supports unicast, src=%s, dst=%s",
+           ip_addr_ntop(src, addr1, sizeof(addr1)), ip_addr_ntop(dst, addr2, sizeof(addr2)));
     return;
   }
-  /* end */
-
   debugf("%s:%d => %s:%d, len=%zu (payload=%zu)",
          ip_addr_ntop(src, addr1, sizeof(addr1)), ntoh16(hdr->src),
          ip_addr_ntop(dst, addr2, sizeof(addr2)), ntoh16(hdr->dst),
          len, len - sizeof(*hdr));
   tcp_dump(data, len);
-  /* endpointに入れなおす */
   local.addr = dst;
   local.port = hdr->dst;
   foreign.addr = src;
   foreign.port = hdr->src;
-  /* end */
-  /* tcp_segment_arrives() で必要な情報（SEG.XXX）を集める */
   hlen = (hdr->off >> 4) << 2;
   seg.seq = ntoh32(hdr->seq);
   seg.ack = ntoh32(hdr->ack);
@@ -537,15 +801,31 @@ static void tcp_input(const uint8_t *data, size_t len, ip_addr_t src, ip_addr_t 
   }
   seg.wnd = ntoh16(hdr->wnd);
   seg.up = ntoh16(hdr->up);
-  /* end */
   mutex_lock(&mutex);
   tcp_segment_arrives(&seg, hdr->flg, (uint8_t *)hdr + hlen, len - hlen, &local, &foreign);
   mutex_unlock(&mutex);
-
   return;
 }
 
-static void event_handler(void *arg)
+static void
+tcp_timer(void)
+{
+  struct tcp_pcb *pcb;
+
+  mutex_lock(&mutex);
+  for (pcb = pcbs; pcb < tailof(pcbs); pcb++)
+  {
+    if (pcb->state == TCP_PCB_STATE_FREE)
+    {
+      continue;
+    }
+    queue_foreach(&pcb->queue, tcp_retransmit_queue_emit, pcb);
+  }
+  mutex_unlock(&mutex);
+}
+
+static void
+event_handler(void *arg)
 {
   struct tcp_pcb *pcb;
 
@@ -562,9 +842,16 @@ static void event_handler(void *arg)
 
 int tcp_init(void)
 {
-  if (ip_protocol_register(IP_PROTOCOL_TCP, tcp_input) < 0)
+  struct timeval interval = {0, 100000}; /* 100ms */
+
+  if (ip_protocol_register(IP_PROTOCOL_TCP, tcp_input) == -1)
   {
     errorf("ip_protocol_register() failure");
+    return -1;
+  }
+  if (net_timer_register(interval, tcp_timer) == -1)
+  {
+    errorf("net_timer_register() failure");
     return -1;
   }
   net_event_subscribe(event_handler, NULL);
@@ -592,10 +879,23 @@ int tcp_open_rfc793(struct ip_endpoint *local, struct ip_endpoint *foreign, int 
   }
   if (active)
   {
-    errorf("active open does not implement");
-    tcp_pcb_release(pcb);
-    mutex_unlock(&mutex);
-    return -1;
+    debugf("active open: local=%s, foreign=%s, connecting...",
+           ip_endpoint_ntop(local, ep1, sizeof(ep1)), ip_endpoint_ntop(foreign, ep2, sizeof(ep2)));
+    pcb->local = *local;
+    pcb->foreign = *foreign;
+    pcb->rcv.wnd = sizeof(pcb->buf);
+    pcb->iss = random();
+    if (tcp_output(pcb, TCP_FLG_SYN, NULL, 0) == -1)
+    {
+      errorf("tcp_output() failure");
+      pcb->state = TCP_PCB_STATE_CLOSED;
+      tcp_pcb_release(pcb);
+      mutex_unlock(&mutex);
+      return -1;
+    }
+    pcb->snd.una = pcb->iss;
+    pcb->snd.nxt = pcb->iss + 1;
+    pcb->state = TCP_PCB_STATE_SYN_SENT;
   }
   else
   {
@@ -653,8 +953,157 @@ int tcp_close(int id)
     mutex_unlock(&mutex);
     return -1;
   }
-  tcp_output(pcb, TCP_FLG_RST, NULL, 0);
-  tcp_pcb_release(pcb);
+  switch (pcb->state)
+  {
+  case TCP_PCB_STATE_ESTABLISHED:
+    tcp_output(pcb, TCP_FLG_ACK | TCP_FLG_FIN, NULL, 0);
+    pcb->snd.nxt++;
+    pcb->state = TCP_PCB_STATE_FIN_WAIT1;
+    break;
+  case TCP_PCB_STATE_CLOSE_WAIT:
+    tcp_output(pcb, TCP_FLG_ACK | TCP_FLG_FIN, NULL, 0);
+    pcb->snd.nxt++;
+    pcb->state = TCP_PCB_STATE_LAST_ACK; /* RFC793 says "enter CLOSING state", but it seems to be LAST-ACK state */
+    break;
+  default:
+    errorf("unknown state '%u'", pcb->state);
+    mutex_unlock(&mutex);
+    return -1;
+  }
+  if (pcb->state == TCP_PCB_STATE_CLOSED)
+  {
+    tcp_pcb_release(pcb);
+  }
+  else
+  {
+    sched_wakeup(&pcb->ctx);
+  }
   mutex_unlock(&mutex);
   return 0;
+}
+
+ssize_t
+tcp_send(int id, uint8_t *data, size_t len)
+{
+  struct tcp_pcb *pcb;
+  ssize_t sent = 0;
+  struct ip_iface *iface;
+  size_t mss, cap, slen;
+
+  mutex_lock(&mutex);
+  pcb = tcp_pcb_get(id);
+  if (!pcb)
+  {
+    errorf("pcb not found");
+    mutex_unlock(&mutex);
+    return -1;
+  }
+RETRY:
+  switch (pcb->state)
+  {
+  case TCP_PCB_STATE_ESTABLISHED:
+  case TCP_PCB_STATE_CLOSE_WAIT:
+    iface = ip_route_get_iface(pcb->foreign.addr);
+    if (!iface)
+    {
+      errorf("iface not found");
+      mutex_unlock(&mutex);
+      return -1;
+    }
+    mss = NET_IFACE(iface)->dev->mtu - (IP_HDR_SIZE_MIN + sizeof(struct tcp_hdr));
+    while (sent < (ssize_t)len)
+    {
+      cap = pcb->snd.wnd - (pcb->snd.nxt - pcb->snd.una);
+      if (!cap)
+      {
+        if (sched_sleep(&pcb->ctx, &mutex, NULL) == -1)
+        {
+          debugf("interrupted");
+          if (!sent)
+          {
+            mutex_unlock(&mutex);
+            errno = EINTR;
+            return -1;
+          }
+          break;
+        }
+        goto RETRY;
+      }
+      slen = MIN(MIN(mss, len - sent), cap);
+      if (tcp_output(pcb, TCP_FLG_ACK | TCP_FLG_PSH, data + sent, slen) == -1)
+      {
+        errorf("tcp_output() failure");
+        pcb->state = TCP_PCB_STATE_CLOSED;
+        tcp_pcb_release(pcb);
+        mutex_unlock(&mutex);
+        return -1;
+      }
+      pcb->snd.nxt += slen;
+      sent += slen;
+    }
+    break;
+  case TCP_PCB_STATE_LAST_ACK:
+    errorf("connection closing");
+    mutex_unlock(&mutex);
+    return -1;
+  default:
+    errorf("unknown state '%u'", pcb->state);
+    mutex_unlock(&mutex);
+    return -1;
+  }
+  mutex_unlock(&mutex);
+  return sent;
+}
+
+ssize_t
+tcp_receive(int id, uint8_t *buf, size_t size)
+{
+  struct tcp_pcb *pcb;
+  size_t remain, len;
+
+  mutex_lock(&mutex);
+  pcb = tcp_pcb_get(id);
+  if (!pcb)
+  {
+    errorf("pcb not found");
+    mutex_unlock(&mutex);
+    return -1;
+  }
+RETRY:
+  switch (pcb->state)
+  {
+  case TCP_PCB_STATE_ESTABLISHED:
+    remain = sizeof(pcb->buf) - pcb->rcv.wnd;
+    if (!remain)
+    {
+      if (sched_sleep(&pcb->ctx, &mutex, NULL) == -1)
+      {
+        debugf("interrupted");
+        mutex_unlock(&mutex);
+        errno = EINTR;
+        return -1;
+      }
+      goto RETRY;
+    }
+    break;
+  case TCP_PCB_STATE_CLOSE_WAIT:
+    remain = sizeof(pcb->buf) - pcb->rcv.wnd;
+    if (remain)
+    {
+      break;
+    }
+    debugf("connection closing");
+    mutex_unlock(&mutex);
+    return 0;
+  default:
+    errorf("unknown state '%u'", pcb->state);
+    mutex_unlock(&mutex);
+    return -1;
+  }
+  len = MIN(size, remain);
+  memcpy(buf, pcb->buf, len);
+  memmove(pcb->buf, pcb->buf + len, remain - len);
+  pcb->rcv.wnd += len;
+  mutex_unlock(&mutex);
+  return len;
 }
